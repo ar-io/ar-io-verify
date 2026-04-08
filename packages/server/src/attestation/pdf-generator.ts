@@ -240,15 +240,14 @@ export async function generatePdf(result: VerificationResult): Promise<Uint8Arra
     y -= 12;
 
     const att = result.attestation;
-    const attestLines = [
+    const fields = [
       `Operator: ${att.operator}`,
       `Gateway: ${att.gateway}`,
       `Attested: ${att.attestedAt}`,
       `Payload Hash: ${att.payloadHash}`,
-      `Signature: ${att.signature.substring(0, 60)}...`,
     ];
 
-    for (const line of attestLines) {
+    for (const line of fields) {
       if (y < MARGIN + 20) {
         page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
         y = PAGE_HEIGHT - MARGIN;
@@ -256,6 +255,30 @@ export async function generatePdf(result: VerificationResult): Promise<Uint8Arra
       y = drawText(page, line, fontRegular, 7, MARGIN, y, rgb(0.2, 0.2, 0.2));
       y -= 3;
     }
+
+    // Signature — full value, wrapped across lines
+    if (y < MARGIN + 60) {
+      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
+    y = drawText(page, 'Signature:', fontRegular, 7, MARGIN, y, rgb(0.2, 0.2, 0.2));
+    y -= 2;
+    const sigResult = drawWrappedText(page, doc, att.signature, fontRegular, 6, MARGIN, y, CONTENT_WIDTH, 8, rgb(0.3, 0.3, 0.3));
+    page = sigResult.page;
+    y = sigResult.y;
+    y -= 6;
+
+    // Attestation payload — full canonical JSON for independent verification
+    if (y < MARGIN + 60) {
+      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
+    y = drawText(page, 'Attestation Payload (canonical JSON):', fontRegular, 7, MARGIN, y, rgb(0.2, 0.2, 0.2));
+    y -= 2;
+    const payloadJson = JSON.stringify(att.payload, Object.keys(att.payload as Record<string, unknown>).sort());
+    const pResult = drawWrappedText(page, doc, payloadJson, fontRegular, 5, MARGIN, y, CONTENT_WIDTH, 7, rgb(0.35, 0.35, 0.35));
+    page = pResult.page;
+    y = pResult.y;
   }
 
   return doc.save();
