@@ -1,4 +1,7 @@
 import { PDFDocument, StandardFonts, rgb, PDFPage, PDFFont } from 'pdf-lib';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   METHODOLOGY_VERIFIED,
   METHODOLOGY_BASIC,
@@ -8,6 +11,26 @@ import {
   gatewayAssessmentStatement,
 } from './templates.js';
 import type { VerificationResult } from '../types.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Load custom fonts once — check multiple locations (src/ for dev, dist/ for production)
+let besleyBytes: Uint8Array | null = null;
+let jakartaBytes: Uint8Array | null = null;
+const fontPaths = [
+  join(__dirname, 'fonts'),           // dist/fonts/ (production Docker)
+  join(__dirname, '..', 'src', 'attestation', 'fonts'), // from dist/ → src/ (dev)
+  join(__dirname, 'attestation', 'fonts'), // src/attestation/fonts/ (tsx dev)
+];
+for (const dir of fontPaths) {
+  try {
+    besleyBytes = readFileSync(join(dir, 'Besley.ttf'));
+    jakartaBytes = readFileSync(join(dir, 'PlusJakartaSans.ttf'));
+    break;
+  } catch {
+    // Try next path
+  }
+}
 
 const MARGIN = 50;
 const PAGE_WIDTH = 595; // A4
@@ -28,8 +51,22 @@ const LEVEL_COLORS: Record<number, ReturnType<typeof rgb>> = {
 
 export async function generatePdf(result: VerificationResult): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  // Use ar.io brand fonts if available, fall back to Helvetica
+  let fontRegular: PDFFont;
+  let fontBold: PDFFont;
+  try {
+    fontRegular = jakartaBytes
+      ? await doc.embedFont(jakartaBytes)
+      : await doc.embedFont(StandardFonts.Helvetica);
+    fontBold = besleyBytes
+      ? await doc.embedFont(besleyBytes)
+      : await doc.embedFont(StandardFonts.HelveticaBold);
+  } catch {
+    // Custom font embedding failed — use standard fonts
+    fontRegular = await doc.embedFont(StandardFonts.Helvetica);
+    fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
+  }
 
   let page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   let y = PAGE_HEIGHT - MARGIN;
