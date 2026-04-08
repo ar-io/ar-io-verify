@@ -1,0 +1,440 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ar.io Verify API",
+    "description": "Cryptographic data verification and attestation for Arweave via ar.io gateways. Proves existence, authenticity, and authorship of any Arweave transaction including ANS-104 bundled data items.",
+    "version": "0.1.0",
+    "contact": {
+      "name": "ar.io",
+      "url": "https://ar.io"
+    },
+    "license": {
+      "name": "AGPL-3.0",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.html"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current server"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Returns the service status and gateway connectivity.",
+        "tags": ["System"],
+        "responses": {
+          "200": {
+            "description": "Service is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "gateway": { "type": "boolean", "description": "Whether the ar.io gateway is reachable" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api": {
+      "get": {
+        "summary": "API info",
+        "description": "Returns service metadata and available endpoints.",
+        "tags": ["System"],
+        "responses": {
+          "200": {
+            "description": "API information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "version": { "type": "string" },
+                    "description": { "type": "string" },
+                    "endpoints": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/verify": {
+      "post": {
+        "summary": "Verify a transaction",
+        "description": "Runs the full verification pipeline: fetches data from the gateway, computes independent SHA-256 hash, verifies RSA-PSS/ED25519/ECDSA signature via deep hash, and produces a signed attestation. Results are cached.",
+        "tags": ["Verification"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["txId"],
+                "properties": {
+                  "txId": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{43}$",
+                    "description": "Arweave transaction ID (43 base64url characters)",
+                    "example": "WkaBoAfqfW2P4K2NO1SBDwhVsKQJSVTVEnaDvjoyZzA"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/VerificationResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "500": {
+            "description": "Verification failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/verify/tx/{txId}": {
+      "get": {
+        "summary": "Get verification history for a transaction",
+        "description": "Returns all cached verification results for a transaction ID, most recent first.",
+        "tags": ["Verification"],
+        "parameters": [
+          {
+            "name": "txId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^[a-zA-Z0-9_-]{43}$" },
+            "description": "Arweave transaction ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "txId": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "results": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/VerificationResult" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid transaction ID format",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/verify/{id}": {
+      "get": {
+        "summary": "Get a cached verification result",
+        "description": "Retrieve a previously computed verification result by its verification ID.",
+        "tags": ["Verification"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Verification ID (e.g., vrf_abc123...)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/VerificationResult" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/verify/{id}/pdf": {
+      "get": {
+        "summary": "Download PDF attestation certificate",
+        "description": "Generates a PDF certificate containing the verification results, evidence summary, cryptographic proof appendix, and gateway attestation (if signing key is configured).",
+        "tags": ["Attestation"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Verification ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF certificate",
+            "content": {
+              "application/pdf": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "500": {
+            "description": "PDF generation failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/verify/{id}/attestation": {
+      "get": {
+        "summary": "Get attestation for programmatic verification",
+        "description": "Returns the attestation payload, signature, and operator public key. Third parties can verify: SHA-256(canonical JSON payload) → RSA-PSS verify against operator's public key.",
+        "tags": ["Attestation"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Verification ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attestation data",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AttestationResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or no attestation available",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/raw/{txId}": {
+      "get": {
+        "summary": "Proxy raw transaction data",
+        "description": "Proxies raw data from the ar.io gateway. Used for image previews and data inspection. Responses are cached for 1 hour.",
+        "tags": ["Data"],
+        "parameters": [
+          {
+            "name": "txId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Arweave transaction ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw transaction data",
+            "headers": {
+              "Content-Type": { "schema": { "type": "string" }, "description": "MIME type from gateway" },
+              "Cache-Control": { "schema": { "type": "string", "example": "public, max-age=3600" } }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "502": {
+            "description": "Gateway proxy failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        }
+      },
+      "VerificationResult": {
+        "type": "object",
+        "properties": {
+          "verificationId": { "type": "string", "example": "vrf_abc123def456gh" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "txId": { "type": "string", "example": "WkaBoAfqfW2P4K2NO1SBDwhVsKQJSVTVEnaDvjoyZzA" },
+          "level": {
+            "type": "integer",
+            "enum": [1, 2, 3],
+            "description": "3=Signature verified, 2=Hash verified, 1=Existence only"
+          },
+          "existence": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["confirmed", "pending", "not_found"] },
+              "blockHeight": { "type": "integer", "nullable": true },
+              "blockTimestamp": { "type": "string", "format": "date-time", "nullable": true },
+              "blockId": { "type": "string", "nullable": true },
+              "confirmations": { "type": "integer", "nullable": true }
+            }
+          },
+          "authenticity": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["signature_verified", "hash_verified", "unverified"] },
+              "signatureValid": { "type": "boolean", "nullable": true },
+              "signatureSkipReason": { "type": "string", "nullable": true },
+              "dataHash": { "type": "string", "nullable": true, "description": "SHA-256 of raw data (base64url)" },
+              "gatewayHash": { "type": "string", "nullable": true, "description": "SHA-256 from gateway x-ar-io-digest header" },
+              "hashMatch": { "type": "boolean", "nullable": true }
+            }
+          },
+          "owner": {
+            "type": "object",
+            "properties": {
+              "address": { "type": "string", "nullable": true },
+              "publicKey": { "type": "string", "nullable": true },
+              "addressVerified": { "type": "boolean", "nullable": true }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "dataSize": { "type": "integer", "nullable": true },
+              "contentType": { "type": "string", "nullable": true },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "value": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "bundle": {
+            "type": "object",
+            "properties": {
+              "isBundled": { "type": "boolean" },
+              "rootTransactionId": { "type": "string", "nullable": true }
+            }
+          },
+          "gatewayAssessment": {
+            "type": "object",
+            "properties": {
+              "verified": { "type": "boolean", "nullable": true },
+              "stable": { "type": "boolean", "nullable": true },
+              "trusted": { "type": "boolean", "nullable": true },
+              "hops": { "type": "integer", "nullable": true }
+            }
+          },
+          "attestation": {
+            "nullable": true,
+            "type": "object",
+            "description": "Operator attestation. Null if no signing key configured.",
+            "properties": {
+              "operator": { "type": "string" },
+              "gateway": { "type": "string" },
+              "signature": { "type": "string", "description": "RSA-PSS signature (base64url)" },
+              "payloadHash": { "type": "string", "description": "SHA-256 of canonical attestation payload" },
+              "payload": { "type": "object", "description": "The canonical attestation payload that was signed" },
+              "attestedAt": { "type": "string", "format": "date-time" }
+            }
+          },
+          "links": {
+            "type": "object",
+            "properties": {
+              "dashboard": { "type": "string", "nullable": true },
+              "pdf": { "type": "string", "nullable": true },
+              "rawData": { "type": "string", "nullable": true }
+            }
+          }
+        }
+      },
+      "AttestationResponse": {
+        "type": "object",
+        "properties": {
+          "operator": { "type": "string" },
+          "gateway": { "type": "string" },
+          "signature": { "type": "string", "description": "RSA-PSS signature (base64url)" },
+          "payloadHash": { "type": "string" },
+          "payload": { "type": "object", "description": "Canonical attestation payload" },
+          "attestedAt": { "type": "string", "format": "date-time" },
+          "operatorPublicKey": { "type": "string", "nullable": true, "description": "Operator's RSA public key (base64url n value)" }
+        }
+      }
+    }
+  },
+  "tags": [
+    { "name": "Verification", "description": "Verify Arweave transaction data" },
+    { "name": "Attestation", "description": "Signed certificates and attestation data" },
+    { "name": "Data", "description": "Raw data access and preview" },
+    { "name": "System", "description": "Health checks and service info" }
+  ]
+}

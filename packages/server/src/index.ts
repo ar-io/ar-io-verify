@@ -2,7 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import swaggerUi from 'swagger-ui-express';
 import { config } from './config.js';
 import { logger } from './utils/logger.js';
 import { initCache, closeCache } from './storage/cache.js';
@@ -35,6 +36,8 @@ apiRouter.get('/api', (_req, res) => {
       result: 'GET /api/v1/verify/:id',
       history: 'GET /api/v1/verify/tx/:txId',
       pdf: 'GET /api/v1/verify/:id/pdf',
+      attestation: 'GET /api/v1/verify/:id/attestation',
+      docs: 'GET /api-docs/',
     },
   });
 });
@@ -58,6 +61,29 @@ apiRouter.get('/raw/:txId', async (req, res) => {
   }
 });
 
+// OpenAPI / Swagger UI
+const __filename_main = fileURLToPath(import.meta.url);
+const __dirname_main = dirname(__filename_main);
+const specPaths = [
+  join(__dirname_main, 'openapi.json'),
+  join(__dirname_main, '..', 'src', 'openapi.json'),
+];
+let openApiSpec: Record<string, unknown> | null = null;
+for (const p of specPaths) {
+  try {
+    openApiSpec = JSON.parse(readFileSync(p, 'utf-8'));
+    break;
+  } catch {
+    // try next
+  }
+}
+if (openApiSpec) {
+  apiRouter.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openApiSpec, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'ar.io Verify API',
+  }));
+}
+
 app.use('/', apiRouter);
 app.use('/verify', apiRouter);
 
@@ -80,8 +106,10 @@ if (existsSync(webDistPath)) {
   app.get('*', (req, res, next) => {
     if (
       req.path.startsWith('/api/') ||
+      req.path.startsWith('/api-docs') ||
       req.path.startsWith('/health') ||
       req.path.startsWith('/verify/api/') ||
+      req.path.startsWith('/verify/api-docs') ||
       req.path.startsWith('/verify/health')
     ) {
       next();

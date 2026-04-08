@@ -34,8 +34,9 @@ COPY packages/web/ packages/web/
 # Build the backend
 RUN pnpm --filter @ar-io/verify-server run build
 
-# Copy fonts to dist directory (tsup doesn't bundle binary assets)
+# Copy assets to dist directory (tsup doesn't bundle binary/JSON assets)
 RUN cp -r packages/server/src/attestation/fonts packages/server/dist/fonts 2>/dev/null || true
+RUN cp packages/server/src/openapi.json packages/server/dist/openapi.json 2>/dev/null || true
 
 # Build the frontend
 RUN pnpm --filter verify-web run build
