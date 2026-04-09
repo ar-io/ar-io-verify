@@ -91,12 +91,16 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
   // Step 2: Download raw data (required) + attempt binary header (optional, best-effort)
   const dataDownload = headers ? getRawData(txId, headers.contentLength) : Promise.resolve(null);
 
-  // Binary header is a nice-to-have — race it against a 3s timeout so it doesn't block
+  // Binary header: essential for non-RSA sig types, nice-to-have for RSA.
+  // For non-RSA (ECDSA/ED25519), the exact tag bytes are required for deep hash.
+  // Use a longer timeout for non-RSA since without it, verification will be skipped.
   let binaryHeaderBuf: Buffer | null = null;
   if (headers?.rootTransactionId && headers.dataItemOffset !== null && headers.dataItemDataOffset !== null) {
+    const isNonRsa = headers.signatureType !== null && headers.signatureType !== 1;
+    const timeoutMs = isNonRsa ? 10000 : 3000;
     const headerFetch = getDataItemHeader(headers.rootTransactionId, headers.dataItemOffset, headers.dataItemDataOffset);
-    const timeout3s = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
-    binaryHeaderBuf = await Promise.race([headerFetch, timeout3s]);
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    binaryHeaderBuf = await Promise.race([headerFetch, timeoutPromise]);
   }
 
   const rawData = await dataDownload;
@@ -146,7 +150,7 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
   // Step 4: Signature verification
   const signatureB64 = headers?.signature ?? l1TxData?.signature ?? null;
 
-  const sigResult = attemptSignatureVerification({
+  const sigResult = await attemptSignatureVerification({
     parsedHeader,
     signatureB64Url: signatureB64,
     ownerB64Url: ownerPubKey,
@@ -251,10 +255,10 @@ interface SigVerifyInput {
   verificationId: string;
 }
 
-function attemptSignatureVerification(input: SigVerifyInput): {
+async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
   signatureValid: boolean | null;
   signatureSkipReason: string | null;
-} {
+}> {
   const {
     parsedHeader,
     signatureB64Url,
@@ -317,7 +321,7 @@ function attemptSignatureVerification(input: SigVerifyInput): {
 
       // Prefer binary header (exact bytes, 100% accurate)
       if (parsedHeader) {
-        valid = verifyDataItemSignatureRaw({
+        valid = await verifyDataItemSignatureRaw({
           signatureType: parsedHeader.signatureType,
           signature: parsedHeader.signature,
           owner: parsedHeader.owner,
