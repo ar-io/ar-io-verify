@@ -273,7 +273,7 @@ export async function verifySecp256k1Signature(
     if (compressed.equals(Buffer.from(publicKey))) return true;
 
     // Compare uncompressed: reconstruct from JWK x,y coordinates
-    const jwk = await recovered.serialize({ format: 'jwk' }) as { x: string; y: string };
+    const jwk = (await recovered.serialize({ format: 'jwk' })) as { x: string; y: string };
     const x = base64UrlToBuffer(jwk.x);
     const y = base64UrlToBuffer(jwk.y);
     const uncompressed = Buffer.concat([Buffer.from([0x04]), x, y]);
@@ -448,7 +448,7 @@ export async function verifyDataItemSignatureRaw(input: {
   anchor: Uint8Array;
   rawTagBytes: Uint8Array;
   data: Uint8Array;
-}): boolean {
+}): Promise<boolean> {
   const message = deepHash([
     new TextEncoder().encode('dataitem'),
     new TextEncoder().encode('1'),

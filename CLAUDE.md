@@ -11,13 +11,20 @@ ar.io Verify — cryptographic data verification for Arweave. Proves existence, 
 ```bash
 pnpm install                 # Install all dependencies
 pnpm run build              # Build server + web
-pnpm run dev                # Dev server with hot reload
-pnpm run test               # Run tests (46 tests)
+pnpm run dev                # Server only (tsx --watch) — does NOT start the web app
+pnpm --filter verify-web run dev   # Web app only (Vite, separate terminal)
+pnpm run test               # Run all server tests (vitest)
 pnpm run format             # Format code (run before commit)
+
+# Run a single test file or filter by name
+pnpm --filter @ar-io/verify-server run test -- tests/utils/crypto.test.ts
+pnpm --filter @ar-io/verify-server run test -- -t "deep hash"
 
 # Deploy alongside an ar.io gateway
 cd deploy && bash start.sh
 ```
+
+Tests live in `packages/server/tests/` (mirrors `src/` layout), not co-located with source files.
 
 ## Architecture
 
@@ -29,6 +36,7 @@ deploy/      Standalone Docker Compose deployment
 ```
 
 **Verification pipeline** (`packages/server/src/pipeline/orchestrator.ts`):
+
 1. HEAD /raw/ + GraphQL — in parallel (~50ms)
 2. Determine L1 tx vs ANS-104 data item
 3. Download raw data + fetch binary header (range request on root bundle)
@@ -36,6 +44,7 @@ deploy/      Standalone Docker Compose deployment
 5. Operator attestation — sign result with gateway wallet
 
 **Key files:**
+
 - `server/src/utils/crypto.ts` — deep hash, RSA-PSS, ED25519, ECDSA, Avro tag serialization
 - `server/src/utils/ans104-parser.ts` — ANS-104 binary header parser
 - `server/src/utils/signing.ts` — JWK loader, attestation builder, RSA-PSS signer
@@ -51,6 +60,8 @@ deploy/      Standalone Docker Compose deployment
 5. Ethereum ECDSA (type 3) verification is implemented but may not verify all signer implementations
 6. Binary header fetch has a 3s timeout — falls back to GraphQL tags if root bundle is slow
 7. `SIGNING_KEY_PATH` is optional — server works without it, just no attestation in PDF
+8. When running in Docker, `GATEWAY_URL` must NOT be `localhost`/`127.0.0.1` — config validation in `server/src/config.ts` rejects it on startup. Use the gateway service hostname (e.g. `http://core:4000`) on the shared `ar-io-network`.
+9. Env config is parsed with zod in `server/src/config.ts` — add new env vars there, not ad-hoc `process.env` reads.
 
 ## API Endpoints
 

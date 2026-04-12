@@ -66,18 +66,20 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
     gql?.ownerAddress ??
     headers?.ownerAddress ??
     (ownerPubKey && ownerPubKey.length > 100 ? ownerToAddress(ownerPubKey) : ownerPubKey);
-  const addressVerified = ownerPubKey && ownerPubKey.length > 100 && ownerAddress
-    ? ownerToAddress(ownerPubKey) === ownerAddress
-    : null;
+  const addressVerified =
+    ownerPubKey && ownerPubKey.length > 100 && ownerAddress
+      ? ownerToAddress(ownerPubKey) === ownerAddress
+      : null;
 
   // Tags from GraphQL (correct order) or headers (alphabetical, fallback)
-  const displayTags = gql?.tags?.length ? gql.tags : headers?.tags ?? [];
+  const displayTags = gql?.tags?.length ? gql.tags : (headers?.tags ?? []);
 
   // Determine if this is a bundled data item or L1 tx
   const isBundled = !!headers?.rootTransactionId && headers.rootTransactionId !== txId;
 
   // Content info
-  const contentType = headers?.contentType ?? displayTags.find((t) => t.name === 'Content-Type')?.value ?? null;
+  const contentType =
+    headers?.contentType ?? displayTags.find((t) => t.name === 'Content-Type')?.value ?? null;
   const dataSize = headers?.contentLength ?? null;
 
   // Gateway assessment
@@ -95,11 +97,21 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
   // For non-RSA (ECDSA/ED25519), the exact tag bytes are required for deep hash.
   // Use a longer timeout for non-RSA since without it, verification will be skipped.
   let binaryHeaderBuf: Buffer | null = null;
-  if (headers?.rootTransactionId && headers.dataItemOffset !== null && headers.dataItemDataOffset !== null) {
+  if (
+    headers?.rootTransactionId &&
+    headers.dataItemOffset !== null &&
+    headers.dataItemDataOffset !== null
+  ) {
     const isNonRsa = headers.signatureType !== null && headers.signatureType !== 1;
     const timeoutMs = isNonRsa ? 10000 : 3000;
-    const headerFetch = getDataItemHeader(headers.rootTransactionId, headers.dataItemOffset, headers.dataItemDataOffset);
-    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    const headerFetch = getDataItemHeader(
+      headers.rootTransactionId,
+      headers.dataItemOffset,
+      headers.dataItemDataOffset
+    );
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), timeoutMs)
+    );
     binaryHeaderBuf = await Promise.race([headerFetch, timeoutPromise]);
   }
 
@@ -108,13 +120,16 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
   // Parse binary header if available
   const parsedHeader = binaryHeaderBuf ? parseDataItemHeader(binaryHeaderBuf) : null;
   if (parsedHeader) {
-    logger.info({ txId, sigType: parsedHeader.signatureType, tagCount: parsedHeader.tagCount }, 'Parsed ANS-104 binary header');
+    logger.info(
+      { txId, sigType: parsedHeader.signatureType, tagCount: parsedHeader.tagCount },
+      'Parsed ANS-104 binary header'
+    );
   }
 
   // Compute independent hash
   const independentHash = rawData ? sha256B64Url(rawData) : null;
   const gatewayHash = headers?.digest ?? null;
-  const hashMatch = independentHash ? (gatewayHash ? gatewayHash === independentHash : true) : null;
+  const hashMatch = independentHash && gatewayHash ? gatewayHash === independentHash : null;
 
   // Step 3: For L1 transactions, fetch /tx/ for deep hash fields
   let l1TxData: {
@@ -204,7 +219,7 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
     metadata: { dataSize, contentType, tags: displayTags },
     bundle: {
       isBundled,
-      rootTransactionId: isBundled ? headers?.rootTransactionId ?? null : null,
+      rootTransactionId: isBundled ? (headers?.rootTransactionId ?? null) : null,
     },
     gatewayAssessment,
     attestation: null,
@@ -219,7 +234,14 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
   result.attestation = createAttestation(result);
 
   logger.info(
-    { verificationId, txId, level, authenticity: authenticityStatus, existence: existence.status, attested: !!result.attestation },
+    {
+      verificationId,
+      txId,
+      level,
+      authenticity: authenticityStatus,
+      existence: existence.status,
+      attested: !!result.attestation,
+    },
     'Verification complete'
   );
 
@@ -282,7 +304,10 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
   }
   // 43 chars = wallet address only (no public key). Longer values are valid keys for non-RSA sig types.
   if (ownerB64Url && ownerB64Url.length <= 43 && !parsedHeader) {
-    return { signatureValid: null, signatureSkipReason: 'Only wallet address available, full public key required' };
+    return {
+      signatureValid: null,
+      signatureSkipReason: 'Only wallet address available, full public key required',
+    };
   }
 
   const sizeSkipMsg =
@@ -298,7 +323,10 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
       const sig = l1TxData.signature || signatureB64Url;
       if (!sig) return { signatureValid: null, signatureSkipReason: 'No signature' };
       if (l1TxData.format === 1 && !rawDataBytes) {
-        return { signatureValid: null, signatureSkipReason: sizeSkipMsg ?? 'Raw data unavailable for format 1' };
+        return {
+          signatureValid: null,
+          signatureSkipReason: sizeSkipMsg ?? 'Raw data unavailable for format 1',
+        };
       }
       valid = verifyTransactionSignature({
         format: l1TxData.format,
@@ -335,11 +363,12 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
         // Re-encoded GraphQL tags may differ from original bytes, causing recovery mismatch.
         return {
           signatureValid: null,
-          signatureSkipReason: 'Binary header unavailable. Non-RSA signatures require exact tag bytes from the bundle.',
+          signatureSkipReason:
+            'Binary header unavailable. Non-RSA signatures require exact tag bytes from the bundle.',
         };
       } else if (tagsB64.length > 0 && signatureB64Url && ownerB64Url) {
         // RSA fallback: GraphQL tags (correct order, re-encoded) — RSA-PSS is tolerant
-        valid = verifyDataItemSignature({
+        valid = await verifyDataItemSignature({
           signatureType: signatureType ?? 1,
           signatureB64Url,
           ownerB64Url,
@@ -349,11 +378,17 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
           data: rawDataBytes,
         });
       } else {
-        return { signatureValid: null, signatureSkipReason: 'Insufficient data for signature verification' };
+        return {
+          signatureValid: null,
+          signatureSkipReason: 'Insufficient data for signature verification',
+        };
       }
     }
 
-    logger.info({ verificationId, txId, signatureValid: valid }, 'Signature verification completed');
+    logger.info(
+      { verificationId, txId, signatureValid: valid },
+      'Signature verification completed'
+    );
     return { signatureValid: valid, signatureSkipReason: null };
   } catch (error) {
     logger.error({ error, verificationId, txId }, 'Signature verification error');
@@ -368,14 +403,31 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
 // Not-found result
 // ---------------------------------------------------------------------------
 
-function buildNotFoundResult(verificationId: string, timestamp: string, txId: string): VerificationResult {
+function buildNotFoundResult(
+  verificationId: string,
+  timestamp: string,
+  txId: string
+): VerificationResult {
   return {
     verificationId,
     timestamp,
     txId,
     level: 1,
-    existence: { status: 'not_found', blockHeight: null, blockTimestamp: null, blockId: null, confirmations: null },
-    authenticity: { status: 'unverified', signatureValid: null, signatureSkipReason: 'Transaction not found', dataHash: null, gatewayHash: null, hashMatch: null },
+    existence: {
+      status: 'not_found',
+      blockHeight: null,
+      blockTimestamp: null,
+      blockId: null,
+      confirmations: null,
+    },
+    authenticity: {
+      status: 'unverified',
+      signatureValid: null,
+      signatureSkipReason: 'Transaction not found',
+      dataHash: null,
+      gatewayHash: null,
+      hashMatch: null,
+    },
     owner: { address: null, publicKey: null, addressVerified: null },
     metadata: { dataSize: null, contentType: null, tags: [] },
     bundle: { isBundled: false, rootTransactionId: null },
