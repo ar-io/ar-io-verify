@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-ar.io Verify — cryptographic data verification for Arweave. Proves existence, authenticity, and authorship of data stored on the Arweave blockweave via ar.io gateways. Gateway operators sign attestations with their Arweave wallet.
+ar.io Verify — a verification sidecar for ar.io gateways. Independently proves existence, authenticity, and authorship of data stored on the Arweave blockweave. Gateway operators sign attestations with their Arweave wallet.
+
+Three verification levels: (1) existence on-chain, (2) SHA-256 data integrity, (3) cryptographic signature verification via deep hash reconstruction. Level 3 is the full proof — it mathematically confirms the stated owner signed this exact data.
 
 ## Commands
 
@@ -47,7 +49,7 @@ deploy/      Standalone Docker Compose deployment
 
 - `server/src/utils/crypto.ts` — deep hash, RSA-PSS, ED25519, ECDSA, Avro tag serialization
 - `server/src/utils/ans104-parser.ts` — ANS-104 binary header parser
-- `server/src/utils/signing.ts` — JWK loader, attestation builder, RSA-PSS signer
+- `server/src/utils/signing.ts` — JWK loader, attestation builder, RSA-PSS signer (standard single-hash: `createSign('sha256').update(canonical)`)
 - `server/src/gateway/client.ts` — gateway API client (HEAD, GET, GraphQL, range requests)
 - `server/src/openapi.json` — OpenAPI 3.0 spec (served at /api-docs/)
 
@@ -58,8 +60,8 @@ deploy/      Standalone Docker Compose deployment
 3. `/tx/` via Envoy always 404s for data items — use GraphQL + /raw/ headers instead
 4. Tags from HTTP headers are alphabetical (wrong order) — use GraphQL or binary header for sig verification
 5. Ethereum ECDSA (type 3) verification is implemented but may not verify all signer implementations
-6. Binary header fetch has a 3s timeout — falls back to GraphQL tags if root bundle is slow
-7. `SIGNING_KEY_PATH` is optional — server works without it, just no attestation in PDF
+6. Binary header fetch has a 3s timeout (10s for non-RSA) — falls back to GraphQL tags if root bundle is slow
+7. `WALLET_FILE` in deploy `.env` is the host path to the JWK wallet. Compose mounts it to `/app/wallet.json` and sets `SIGNING_KEY_PATH` inside the container. Server works without it, just no attestation.
 8. When running in Docker, `GATEWAY_URL` must NOT be `localhost`/`127.0.0.1` — config validation in `server/src/config.ts` rejects it on startup. Use the gateway service hostname (e.g. `http://core:4000`) on the shared `ar-io-network`.
 9. Env config is parsed with zod in `server/src/config.ts` — add new env vars there, not ad-hoc `process.env` reads.
 

@@ -34,7 +34,10 @@
                   "type": "object",
                   "properties": {
                     "status": { "type": "string", "example": "ok" },
-                    "gateway": { "type": "boolean", "description": "Whether the ar.io gateway is reachable" }
+                    "gateway": {
+                      "type": "boolean",
+                      "description": "Whether the ar.io gateway is reachable"
+                    }
                   }
                 }
               }
@@ -243,7 +246,7 @@
     "/api/v1/verify/{id}/attestation": {
       "get": {
         "summary": "Get attestation for programmatic verification",
-        "description": "Returns the attestation payload, signature, and operator public key. Third parties can verify: SHA-256(canonical JSON payload) → RSA-PSS verify against operator's public key.",
+        "description": "Returns the attestation payload, signature, and operator public key. Third parties can verify by passing the canonical JSON payload (keys sorted alphabetically, no whitespace) to a standard RSA-PSS SHA-256 verifier with the operator's public key.",
         "tags": ["Attestation"],
         "parameters": [
           {
@@ -292,7 +295,10 @@
           "200": {
             "description": "Raw transaction data",
             "headers": {
-              "Content-Type": { "schema": { "type": "string" }, "description": "MIME type from gateway" },
+              "Content-Type": {
+                "schema": { "type": "string" },
+                "description": "MIME type from gateway"
+              },
               "Cache-Control": { "schema": { "type": "string", "example": "public, max-age=3600" } }
             },
             "content": {
@@ -345,11 +351,22 @@
           "authenticity": {
             "type": "object",
             "properties": {
-              "status": { "type": "string", "enum": ["signature_verified", "hash_verified", "unverified"] },
+              "status": {
+                "type": "string",
+                "enum": ["signature_verified", "hash_verified", "unverified"]
+              },
               "signatureValid": { "type": "boolean", "nullable": true },
               "signatureSkipReason": { "type": "string", "nullable": true },
-              "dataHash": { "type": "string", "nullable": true, "description": "SHA-256 of raw data (base64url)" },
-              "gatewayHash": { "type": "string", "nullable": true, "description": "SHA-256 from gateway x-ar-io-digest header" },
+              "dataHash": {
+                "type": "string",
+                "nullable": true,
+                "description": "SHA-256 of raw data (base64url)"
+              },
+              "gatewayHash": {
+                "type": "string",
+                "nullable": true,
+                "description": "SHA-256 from gateway x-ar-io-digest header"
+              },
               "hashMatch": { "type": "boolean", "nullable": true }
             }
           },
@@ -402,8 +419,14 @@
               "operator": { "type": "string" },
               "gateway": { "type": "string" },
               "signature": { "type": "string", "description": "RSA-PSS signature (base64url)" },
-              "payloadHash": { "type": "string", "description": "SHA-256 of canonical attestation payload" },
-              "payload": { "type": "object", "description": "The canonical attestation payload that was signed" },
+              "payloadHash": {
+                "type": "string",
+                "description": "SHA-256 of canonical attestation payload"
+              },
+              "payload": {
+                "type": "object",
+                "description": "The canonical attestation payload that was signed"
+              },
               "attestedAt": { "type": "string", "format": "date-time" }
             }
           },
@@ -426,7 +449,11 @@
           "payloadHash": { "type": "string" },
           "payload": { "type": "object", "description": "Canonical attestation payload" },
           "attestedAt": { "type": "string", "format": "date-time" },
-          "operatorPublicKey": { "type": "string", "nullable": true, "description": "Operator's RSA public key (base64url n value)" }
+          "operatorPublicKey": {
+            "type": "string",
+            "nullable": true,
+            "description": "Operator's RSA public key (base64url n value)"
+          }
         }
       }
     }
