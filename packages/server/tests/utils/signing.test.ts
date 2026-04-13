@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { createHash, verify as rsaVerify, constants as cryptoConstants } from 'node:crypto';
+import {
+  createHash,
+  createPublicKey,
+  createVerify,
+  constants as cryptoConstants,
+} from 'node:crypto';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -52,9 +57,8 @@ vi.mock('../../src/utils/logger.js', () => ({
 
 describe('Signing Module', () => {
   it('initializes with a valid JWK', async () => {
-    const { initSigning, isSigningEnabled, getOperatorAddress } = await import(
-      '../../src/utils/signing.js'
-    );
+    const { initSigning, isSigningEnabled, getOperatorAddress } =
+      await import('../../src/utils/signing.js');
     const result = initSigning();
     expect(result).toBe(true);
     expect(isSigningEnabled()).toBe(true);
@@ -63,9 +67,7 @@ describe('Signing Module', () => {
   });
 
   it('builds a deterministic attestation payload', async () => {
-    const { buildAttestationPayload, canonicalize } = await import(
-      '../../src/utils/signing.js'
-    );
+    const { buildAttestationPayload, canonicalize } = await import('../../src/utils/signing.js');
     const mockResult = {
       txId: 'test-tx-id-padded-to-43-characters-1234567',
       authenticity: { dataHash: 'testhash123', signatureValid: true },
@@ -90,10 +92,8 @@ describe('Signing Module', () => {
     expect(c1).toBe(c2);
   });
 
-  it('signs a payload and produces a valid signature', async () => {
-    const { signPayload, getOperatorPublicKey, canonicalize } = await import(
-      '../../src/utils/signing.js'
-    );
+  it('signs a payload and the signature verifies with standard single-hash RSA-PSS', async () => {
+    const { signPayload, canonicalize } = await import('../../src/utils/signing.js');
     const payload = {
       test: 'data',
       version: 1,
@@ -101,11 +101,25 @@ describe('Signing Module', () => {
 
     const signature = signPayload(payload);
     expect(signature).not.toBeNull();
-    expect(signature!.length).toBeGreaterThan(50);
 
-    // Verify the signature using the public key
-    const pubKeyN = getOperatorPublicKey();
-    expect(pubKeyN).not.toBeNull();
+    // Round-trip verify: canonical JSON → createVerify('sha256') → RSA-PSS verify
+    // This proves the signature is a standard RSA-PSS(SHA-256(canonical)),
+    // NOT a double-hash RSA-PSS(SHA-256(SHA-256(canonical))).
+    const canonical = canonicalize(payload);
+    const sigBuf = Buffer.from(signature!.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    const pubKey = createPublicKey({ key: testJwk as any, format: 'jwk' });
+
+    const verifier = createVerify('sha256');
+    verifier.update(canonical);
+    const valid = verifier.verify(
+      {
+        key: pubKey,
+        padding: cryptoConstants.RSA_PKCS1_PSS_PADDING,
+        saltLength: cryptoConstants.RSA_PSS_SALTLEN_AUTO,
+      },
+      sigBuf
+    );
+    expect(valid).toBe(true);
   });
 
   it('creates a complete attestation from a verification result', async () => {

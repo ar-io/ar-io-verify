@@ -115,10 +115,9 @@ export function signPayload(payload: Record<string, unknown>): string | null {
   if (!privatePem) return null;
 
   const canonical = canonicalize(payload);
-  const hash = createHash('sha256').update(canonical).digest();
 
   const signer = createSign('sha256');
-  signer.update(hash);
+  signer.update(canonical);
 
   const signature = signer.sign({
     key: privatePem,
@@ -132,9 +131,7 @@ export function signPayload(payload: Record<string, unknown>): string | null {
 /**
  * Build and sign a complete attestation for a verification result.
  */
-export function createAttestation(
-  result: VerificationResult
-): VerificationResult['attestation'] {
+export function createAttestation(result: VerificationResult): VerificationResult['attestation'] {
   if (!isSigningEnabled() || !operatorAddress) return null;
 
   const gateway = config.GATEWAY_HOST || 'unknown';
