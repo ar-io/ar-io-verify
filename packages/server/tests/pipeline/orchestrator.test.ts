@@ -9,6 +9,7 @@ vi.mock('../../src/config.js', () => ({
     GATEWAY_TIMEOUT_MS: 5000,
     SQLITE_PATH: ':memory:',
   },
+  resolvePublicGatewayUrl: () => 'https://turbo-gateway.com',
 }));
 
 vi.mock('../../src/utils/logger.js', () => ({

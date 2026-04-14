@@ -12,7 +12,7 @@ const envSchema = z.object({
   GATEWAY_TIMEOUT_MS: z.coerce.number().default(10000),
   GATEWAY_HOST: z.string().default(''),
   // Public, browser-reachable gateway URL for frontend assets (image previews, raw data links).
-  // Falls back to https://${GATEWAY_HOST} if unset, then to https://arweave.net.
+  // Falls back to https://${GATEWAY_HOST} if unset, then to https://turbo-gateway.com.
   PUBLIC_GATEWAY_URL: z.string().default(''),
 
   // Database
@@ -39,6 +39,18 @@ function loadConfig(): Config {
 }
 
 export const config = loadConfig();
+
+/**
+ * Resolve the browser-reachable gateway URL.
+ * Order: PUBLIC_GATEWAY_URL → https://${GATEWAY_HOST} → https://turbo-gateway.com.
+ * Returned URL has no trailing slash.
+ */
+export function resolvePublicGatewayUrl(): string {
+  const raw =
+    config.PUBLIC_GATEWAY_URL ||
+    (config.GATEWAY_HOST ? `https://${config.GATEWAY_HOST}` : 'https://turbo-gateway.com');
+  return raw.replace(/\/$/, '');
+}
 
 function isRunningInDocker(): boolean {
   if (process.env.DOCKER || process.env.CONTAINER) {

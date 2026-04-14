@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid';
 import { logger } from '../utils/logger.js';
+import { resolvePublicGatewayUrl } from '../config.js';
 import { createAttestation } from '../utils/signing.js';
 import {
   verifyDataItemSignature,
@@ -226,7 +227,7 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
     links: {
       dashboard: `/report/${verificationId}`,
       pdf: `/api/v1/verify/${verificationId}/pdf`,
-      rawData: `https://arweave.net/${txId}`,
+      rawData: `${resolvePublicGatewayUrl()}/${txId}`,
     },
   };
 

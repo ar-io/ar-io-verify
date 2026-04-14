@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import swaggerUi from 'swagger-ui-express';
-import { config } from './config.js';
+import { config, resolvePublicGatewayUrl } from './config.js';
 import { logger } from './utils/logger.js';
 import { initCache, closeCache } from './storage/cache.js';
 import { initSigning } from './utils/signing.js';
@@ -45,10 +45,7 @@ apiRouter.get('/api', (_req, res) => {
 
 // Runtime config for the frontend (public gateway URL for image previews, etc.)
 apiRouter.get('/api/config', (_req, res) => {
-  const publicGatewayUrl =
-    config.PUBLIC_GATEWAY_URL ||
-    (config.GATEWAY_HOST ? `https://${config.GATEWAY_HOST}` : 'https://turbo-gateway.com');
-  res.json({ publicGatewayUrl });
+  res.json({ publicGatewayUrl: resolvePublicGatewayUrl() });
 });
 
 // OpenAPI / Swagger UI
