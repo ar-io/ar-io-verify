@@ -75,14 +75,15 @@ bash start.sh
 
 ### Environment Variables
 
-| Variable             | Default                          | Description                                                               |
-| -------------------- | -------------------------------- | ------------------------------------------------------------------------- |
-| `GATEWAY_URL`        | `http://ar-io-node-envoy-1:3000` | ar.io gateway URL (must be reachable from the container)                  |
-| `GATEWAY_HOST`       | (empty)                          | Gateway hostname included in attestation payloads (e.g. `vilenarios.com`) |
-| `WALLET_FILE`        | (empty)                          | Host path to Arweave JWK wallet for signing attestations                  |
-| `VERIFY_PORT`        | `4001`                           | Public port for the verify UI and API                                     |
-| `GATEWAY_TIMEOUT_MS` | `10000`                          | Gateway request timeout                                                   |
-| `LOG_LEVEL`          | `info`                           | Log level: debug, info, warn, error                                       |
+| Variable             | Default                          | Description                                                                                                                 |
+| -------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `GATEWAY_URL`        | `http://ar-io-node-envoy-1:3000` | ar.io gateway URL (must be reachable from the container)                                                                    |
+| `GATEWAY_HOST`       | (empty)                          | Gateway hostname included in attestation payloads (e.g. `vilenarios.com`)                                                   |
+| `PUBLIC_GATEWAY_URL` | (empty)                          | Browser-reachable gateway URL for image previews. Falls back to `https://${GATEWAY_HOST}`, then `https://turbo-gateway.com` |
+| `WALLET_FILE`        | (empty)                          | Host path to Arweave JWK wallet for signing attestations                                                                    |
+| `VERIFY_PORT`        | `4001`                           | Public port for the verify UI and API                                                                                       |
+| `GATEWAY_TIMEOUT_MS` | `10000`                          | Gateway request timeout                                                                                                     |
+| `LOG_LEVEL`          | `info`                           | Log level: debug, info, warn, error                                                                                         |
 
 ### Nginx Configuration
 
@@ -107,7 +108,7 @@ Interactive docs: `/api-docs/`
 | `GET`  | `/api/v1/verify/tx/:txId`        | Get history for a transaction                 |
 | `GET`  | `/api/v1/verify/:id/pdf`         | Download PDF certificate                      |
 | `GET`  | `/api/v1/verify/:id/attestation` | Get attestation for programmatic verification |
-| `GET`  | `/raw/:txId`                     | Proxy raw data from gateway                   |
+| `GET`  | `/api/config`                    | Runtime frontend config (public gateway URL)  |
 | `GET`  | `/health`                        | Health check                                  |
 | `GET`  | `/api-docs/`                     | Swagger UI                                    |
 

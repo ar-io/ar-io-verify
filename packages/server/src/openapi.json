@@ -71,6 +71,31 @@
         }
       }
     },
+    "/api/config": {
+      "get": {
+        "summary": "Runtime frontend configuration",
+        "description": "Returns runtime config for browser clients, including the public gateway URL to use for image previews and raw data links.",
+        "tags": ["System"],
+        "responses": {
+          "200": {
+            "description": "Runtime configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "publicGatewayUrl": {
+                      "type": "string",
+                      "description": "Browser-reachable gateway URL (e.g. https://vilenarios.com)"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/verify": {
       "post": {
         "summary": "Verify a transaction",
@@ -276,47 +301,6 @@
           }
         }
       }
-    },
-    "/raw/{txId}": {
-      "get": {
-        "summary": "Proxy raw transaction data",
-        "description": "Proxies raw data from the ar.io gateway. Used for image previews and data inspection. Responses are cached for 1 hour.",
-        "tags": ["Data"],
-        "parameters": [
-          {
-            "name": "txId",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" },
-            "description": "Arweave transaction ID"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Raw transaction data",
-            "headers": {
-              "Content-Type": {
-                "schema": { "type": "string" },
-                "description": "MIME type from gateway"
-              },
-              "Cache-Control": { "schema": { "type": "string", "example": "public, max-age=3600" } }
-            },
-            "content": {
-              "application/octet-stream": {
-                "schema": { "type": "string", "format": "binary" }
-              }
-            }
-          },
-          "502": {
-            "description": "Gateway proxy failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Error" }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -461,7 +445,6 @@
   "tags": [
     { "name": "Verification", "description": "Verify Arweave transaction data" },
     { "name": "Attestation", "description": "Signed certificates and attestation data" },
-    { "name": "Data", "description": "Raw data access and preview" },
     { "name": "System", "description": "Health checks and service info" }
   ]
 }

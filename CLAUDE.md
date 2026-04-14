@@ -64,6 +64,7 @@ deploy/      Standalone Docker Compose deployment
 7. `WALLET_FILE` in deploy `.env` is the host path to the JWK wallet. Compose mounts it to `/app/wallet.json` and sets `SIGNING_KEY_PATH` inside the container. Server works without it, just no attestation.
 8. When running in Docker, `GATEWAY_URL` must NOT be `localhost`/`127.0.0.1` — config validation in `server/src/config.ts` rejects it on startup. Use the gateway service hostname (e.g. `http://core:4000`) on the shared `ar-io-network`.
 9. Env config is parsed with zod in `server/src/config.ts` — add new env vars there, not ad-hoc `process.env` reads.
+10. Frontend image previews read `publicGatewayUrl` from `GET /api/config`. Resolution order: `PUBLIC_GATEWAY_URL` → `https://${GATEWAY_HOST}` → `https://turbo-gateway.com`. The sidecar no longer proxies `/raw/` — image loads go directly to the gateway.
 
 ## API Endpoints
 
@@ -74,7 +75,7 @@ Interactive docs at `/api-docs/` (Swagger UI).
 - `GET /api/v1/verify/tx/:txId` — verification history
 - `GET /api/v1/verify/:id/pdf` — PDF certificate
 - `GET /api/v1/verify/:id/attestation` — attestation for programmatic verification
-- `GET /raw/:txId` — proxy raw data from gateway
+- `GET /api/config` — runtime frontend config (public gateway URL for image previews)
 - `GET /health` — health check
 
 ## Console Integration

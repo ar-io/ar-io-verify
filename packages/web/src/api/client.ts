@@ -83,3 +83,19 @@ export async function getVerification(id: string): Promise<VerificationResult> {
 export function getPdfUrl(id: string): string {
   return `${BASE}/api/v1/verify/${id}/pdf`;
 }
+
+let cachedConfig: { publicGatewayUrl: string } | null = null;
+export async function getRuntimeConfig(): Promise<{ publicGatewayUrl: string }> {
+  if (cachedConfig) return cachedConfig;
+  try {
+    const res = await fetch(`${BASE}/api/config`);
+    if (res.ok) {
+      cachedConfig = await res.json();
+      return cachedConfig!;
+    }
+  } catch {
+    // fall through
+  }
+  cachedConfig = { publicGatewayUrl: 'https://turbo-gateway.com' };
+  return cachedConfig;
+}

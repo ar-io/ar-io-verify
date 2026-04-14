@@ -11,6 +11,9 @@ const envSchema = z.object({
   GATEWAY_URL: z.string().url().default('http://localhost:3000'),
   GATEWAY_TIMEOUT_MS: z.coerce.number().default(10000),
   GATEWAY_HOST: z.string().default(''),
+  // Public, browser-reachable gateway URL for frontend assets (image previews, raw data links).
+  // Falls back to https://${GATEWAY_HOST} if unset, then to https://arweave.net.
+  PUBLIC_GATEWAY_URL: z.string().default(''),
 
   // Database
   SQLITE_PATH: z.string().default('./data/verify.db'),

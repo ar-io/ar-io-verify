@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { getRuntimeConfig } from '../api/client';
 
 interface Props {
   txId: string;
@@ -8,13 +9,15 @@ interface Props {
 export default function DataPreview({ txId, contentType }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [gatewayUrl, setGatewayUrl] = useState<string | null>(null);
 
-  if (!contentType || !contentType.startsWith('image/') || loadError) return null;
+  useEffect(() => {
+    getRuntimeConfig().then((c) => setGatewayUrl(c.publicGatewayUrl));
+  }, []);
 
-  const path = window.location.pathname;
-  const match = path.match(/(.*\/verify)(\/|$)/);
-  const base = match ? match[1] : '/verify';
-  const imgSrc = `${base}/raw/${txId}`;
+  if (!contentType || !contentType.startsWith('image/') || loadError || !gatewayUrl) return null;
+
+  const imgSrc = `${gatewayUrl.replace(/\/$/, '')}/raw/${txId}`;
 
   return (
     <div className="rounded-2xl border border-ario-border bg-ario-card p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
