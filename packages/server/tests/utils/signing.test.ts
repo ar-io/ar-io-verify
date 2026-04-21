@@ -140,7 +140,6 @@ describe('Signing Module', () => {
         blockHeight: 100,
         blockTimestamp: '2024-01-01T00:00:00Z',
         blockId: null,
-        confirmations: null,
       },
       owner: { address: 'testowner', publicKey: null, addressVerified: true },
       metadata: { dataSize: 500, contentType: 'image/png', tags: [] },

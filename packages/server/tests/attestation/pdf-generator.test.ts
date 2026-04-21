@@ -13,7 +13,6 @@ function makeResult(overrides: Partial<VerificationResult> = {}): VerificationRe
       blockHeight: 888672,
       blockTimestamp: '2022-03-09T04:26:40.000Z',
       blockId: 'block-id-123',
-      confirmations: 100000,
     },
     authenticity: {
       status: 'signature_verified',
@@ -38,7 +37,11 @@ function makeResult(overrides: Partial<VerificationResult> = {}): VerificationRe
     },
     bundle: { isBundled: false, rootTransactionId: null },
     gatewayAssessment: { verified: null, stable: null, trusted: true, hops: 1 },
-    links: { dashboard: '/report/vrf_test', pdf: '/api/v1/verify/vrf_test/pdf', rawData: 'https://arweave.net/test' },
+    links: {
+      dashboard: '/report/vrf_test',
+      pdf: '/api/v1/verify/vrf_test/pdf',
+      rawData: 'https://arweave.net/test',
+    },
     ...overrides,
   };
 }
@@ -56,8 +59,15 @@ describe('PDF Generator', () => {
     const pdf = await generatePdf(
       makeResult({
         level: 1,
-        existence: { status: 'pending', blockHeight: null, blockTimestamp: null, blockId: null, confirmations: null },
-        authenticity: { status: 'unverified', signatureValid: null, signatureSkipReason: 'Not indexed', dataHash: null, gatewayHash: null, hashMatch: null },
+        existence: { status: 'pending', blockHeight: null, blockTimestamp: null, blockId: null },
+        authenticity: {
+          status: 'unverified',
+          signatureValid: null,
+          signatureSkipReason: 'Not indexed',
+          dataHash: null,
+          gatewayHash: null,
+          hashMatch: null,
+        },
       })
     );
     expect(pdf.byteLength).toBeGreaterThan(100);
@@ -66,7 +76,10 @@ describe('PDF Generator', () => {
   it('generates PDF for bundled data item', async () => {
     const pdf = await generatePdf(
       makeResult({
-        bundle: { isBundled: true, rootTransactionId: 'root12345678901234567890123456789012345678' },
+        bundle: {
+          isBundled: true,
+          rootTransactionId: 'root12345678901234567890123456789012345678',
+        },
       })
     );
     expect(pdf.byteLength).toBeGreaterThan(100);

@@ -210,9 +210,10 @@ export async function getTransactionViaGraphQL(txId: string): Promise<{
   ownerAddress: string | null;
   blockHeight: number | null;
   blockTimestamp: string | null;
+  blockId: string | null;
 } | null> {
   try {
-    const query = `{ transaction(id: "${txId}") { tags { name value } owner { address key } block { height timestamp } } }`;
+    const query = `{ transaction(id: "${txId}") { tags { name value } owner { address key } block { height timestamp id } } }`;
     const res = await fetchWithTimeout(`${baseUrl}/graphql`, timeout, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -237,6 +238,7 @@ export async function getTransactionViaGraphQL(txId: string): Promise<{
       blockTimestamp: tx.block?.timestamp
         ? new Date(tx.block.timestamp * 1000).toISOString()
         : null,
+      blockId: tx.block?.id ?? null,
     };
   } catch (error) {
     logger.warn({ error, txId }, 'GraphQL query threw');

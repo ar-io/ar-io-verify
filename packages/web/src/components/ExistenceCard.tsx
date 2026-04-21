@@ -5,7 +5,6 @@ interface Props {
     status: 'confirmed' | 'pending' | 'not_found';
     blockHeight: number | null;
     blockTimestamp: string | null;
-    confirmations: number | null;
   };
   txId: string;
 }
@@ -64,11 +63,6 @@ export default function ExistenceCard({ existence, txId }: Props) {
             >
               Block {existence.blockHeight.toLocaleString()}
             </a>
-          )}
-          {existence.confirmations !== null && existence.confirmations > 0 && (
-            <p className="text-xs text-ario-black/30">
-              {existence.confirmations.toLocaleString()} confirmations
-            </p>
           )}
         </div>
       </div>

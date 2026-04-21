@@ -328,8 +328,7 @@
               "status": { "type": "string", "enum": ["confirmed", "pending", "not_found"] },
               "blockHeight": { "type": "integer", "nullable": true },
               "blockTimestamp": { "type": "string", "format": "date-time", "nullable": true },
-              "blockId": { "type": "string", "nullable": true },
-              "confirmations": { "type": "integer", "nullable": true }
+              "blockId": { "type": "string", "nullable": true }
             }
           },
           "authenticity": {

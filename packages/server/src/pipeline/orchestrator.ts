@@ -51,15 +51,13 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
         status: 'confirmed',
         blockHeight: gql.blockHeight,
         blockTimestamp: gql.blockTimestamp,
-        blockId: null,
-        confirmations: null,
+        blockId: gql.blockId ?? null,
       }
     : {
         status: headers ? 'pending' : 'not_found',
         blockHeight: null,
         blockTimestamp: null,
         blockId: null,
-        confirmations: null,
       };
 
   // Owner from GraphQL or headers
@@ -445,7 +443,6 @@ function buildNotFoundResult(
       blockHeight: null,
       blockTimestamp: null,
       blockId: null,
-      confirmations: null,
     },
     authenticity: {
       status: 'unverified',

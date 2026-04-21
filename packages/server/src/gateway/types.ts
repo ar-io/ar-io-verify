@@ -13,40 +13,6 @@ export interface GatewayTransaction {
   signature: string;
 }
 
-/** Response from GET /tx/{txId}/status */
-export interface GatewayTransactionStatus {
-  block_height: number;
-  block_indep_hash: string;
-  number_of_confirmations: number;
-}
-
-/** Response from GET /block/height/{height} */
-export interface GatewayBlock {
-  nonce: string;
-  previous_block: string;
-  timestamp: number;
-  last_retarget: number;
-  diff: string;
-  height: number;
-  hash: string;
-  indep_hash: string;
-  txs: string[];
-  tx_root: string;
-  wallet_list: string;
-  reward_addr: string;
-  reward_pool: string;
-  weave_size: string;
-  block_size: string;
-}
-
-/** Response fields added in newer gateway versions */
-export interface GatewayTransactionExtended extends GatewayTransaction {
-  signature_type?: number;
-  parent_id?: string | null;
-  root_transaction_id?: string | null;
-  content_type?: string | null;
-}
-
 /** Parsed headers from HEAD /raw/{txId} */
 export interface RawDataHeaders {
   digest: string | null;

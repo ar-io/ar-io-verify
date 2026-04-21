@@ -9,7 +9,6 @@ export interface VerificationResult {
     blockHeight: number | null;
     blockTimestamp: string | null;
     blockId: string | null;
-    confirmations: number | null;
   };
 
   authenticity: {

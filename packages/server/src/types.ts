@@ -15,7 +15,6 @@ export interface VerificationResult {
     blockHeight: number | null;
     blockTimestamp: string | null;
     blockId: string | null;
-    confirmations: number | null;
   };
 
   /** Authenticity — the primary proof. Signature first, hash as fallback. */

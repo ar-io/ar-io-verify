@@ -34,7 +34,6 @@ function makeResult(id: string, txId: string): VerificationResult {
       blockHeight: 100,
       blockTimestamp: null,
       blockId: null,
-      confirmations: null,
     },
     authenticity: {
       status: 'signature_verified',
