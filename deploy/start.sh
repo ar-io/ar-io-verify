@@ -92,12 +92,13 @@ echo "  API:    http://localhost:${VERIFY_PORT:-4001}/api"
 echo "  Health: http://localhost:${VERIFY_PORT:-4001}/health"
 
 # Pre-flight: wait briefly for the sidecar to come up, then probe gateway reach.
-# We check from inside the sidecar container because the GATEWAY_URL uses a
+# We check from inside the sidecar container (via `compose exec`, which resolves
+# the container name regardless of project name) because GATEWAY_URL uses a
 # Docker-network hostname that isn't resolvable from the host.
 echo ""
 echo "Checking gateway reachability..."
 for i in 1 2 3 4 5; do
-  if docker exec deploy-verify-sidecar-1 sh -c "curl -f -s --max-time 3 \"\$GATEWAY_URL/ar-io/info\" >/dev/null" 2>/dev/null; then
+  if docker compose exec -T verify-sidecar sh -c 'curl -f -s --max-time 3 "$GATEWAY_URL/ar-io/info" >/dev/null' 2>/dev/null; then
     echo "  OK — gateway reachable at $GATEWAY_URL"
     break
   fi
