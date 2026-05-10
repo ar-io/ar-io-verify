@@ -102,9 +102,30 @@ export function buildAttestationPayload(
 
 /**
  * Canonicalize a payload to deterministic JSON (sorted keys, no whitespace).
+ *
+ * Uses deep recursive sorting so nested objects also serialize identically
+ * across implementations. For flat single-level payloads (the existing per-tx
+ * attestation) the output matches what `JSON.stringify(obj, Object.keys(obj).sort())`
+ * produced before, so previously-signed attestations remain verifiable.
+ *
+ * Arrays preserve their existing order — array order is semantic, not
+ * incidental. Strings, numbers, booleans, null pass through JSON.stringify
+ * verbatim.
  */
 export function canonicalize(payload: Record<string, unknown>): string {
-  return JSON.stringify(payload, Object.keys(payload).sort());
+  return canonicalizeValue(payload);
+}
+
+function canonicalizeValue(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(canonicalizeValue).join(',') + ']';
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalizeValue(obj[k])).join(',') + '}';
 }
 
 /**

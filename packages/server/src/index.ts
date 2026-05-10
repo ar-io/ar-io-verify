@@ -6,10 +6,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import swaggerUi from 'swagger-ui-express';
 import { config, resolvePublicGatewayUrl } from './config.js';
 import { logger } from './utils/logger.js';
+import { initDb, closeDb } from './storage/db.js';
 import { initCache, closeCache } from './storage/cache.js';
+import { initJobsStore, sweepStaleRunning } from './storage/jobs.js';
+import { resumePending, startStallDetector, stopStallDetector } from './pipeline/job-worker.js';
 import { initSigning } from './utils/signing.js';
 import healthRouter from './routes/health.js';
 import verifyRouter from './routes/verify.js';
+import jobsRouter from './routes/jobs.js';
 
 const app = express();
 
@@ -24,6 +28,7 @@ app.use(express.json());
 const apiRouter = express.Router();
 apiRouter.use('/health', healthRouter);
 apiRouter.use('/api/v1/verify', verifyRouter);
+apiRouter.use('/api/v1/jobs', jobsRouter);
 
 apiRouter.get('/api', (_req, res) => {
   res.json({
@@ -37,6 +42,11 @@ apiRouter.get('/api', (_req, res) => {
       history: 'GET /api/v1/verify/tx/:txId',
       pdf: 'GET /api/v1/verify/:id/pdf',
       attestation: 'GET /api/v1/verify/:id/attestation',
+      jobsCreate: 'POST /api/v1/jobs',
+      jobsStatus: 'GET /api/v1/jobs/:id',
+      jobsResults: 'GET /api/v1/jobs/:id/results',
+      jobsCancel: 'DELETE /api/v1/jobs/:id',
+      jobsEvents: 'GET /api/v1/jobs/events',
       config: 'GET /api/config',
       docs: 'GET /api-docs/',
     },
@@ -113,7 +123,9 @@ if (existsSync(webDistPath)) {
 // Graceful shutdown
 async function shutdown() {
   logger.info('Shutting down...');
+  stopStallDetector();
   closeCache();
+  closeDb();
   process.exit(0);
 }
 
@@ -122,8 +134,22 @@ process.on('SIGTERM', shutdown);
 
 // Start server
 try {
+  initDb();
   initCache();
+  initJobsStore();
   initSigning();
+
+  // Reset jobs/runs orphaned by an unclean shutdown so the worker pool
+  // re-enqueues them. (Task #16: restart resilience)
+  const swept = sweepStaleRunning();
+  if (swept.jobs > 0 || swept.runs > 0) {
+    logger.info(swept, 'Reset stale running jobs/runs from previous process');
+  }
+
+  // Re-enqueue any pending jobs (from this boot's sweep + jobs created in a
+  // previous process that never got picked up).
+  resumePending();
+  startStallDetector();
 
   app.listen(config.PORT, () => {
     logger.info(`Verify Sidecar running at http://localhost:${config.PORT}`);

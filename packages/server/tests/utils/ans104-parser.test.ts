@@ -5,12 +5,14 @@ import { parseDataItemHeader } from '../../src/utils/ans104-parser.js';
  * Build a minimal ANS-104 data item header for testing.
  * Signature type 1 (RSA): 512-byte sig, 512-byte owner.
  */
-function buildTestHeader(opts: {
-  hasTarget?: boolean;
-  hasAnchor?: boolean;
-  tagCount?: number;
-  tagBytes?: Buffer;
-} = {}): Buffer {
+function buildTestHeader(
+  opts: {
+    hasTarget?: boolean;
+    hasAnchor?: boolean;
+    tagCount?: number;
+    tagBytes?: Buffer;
+  } = {}
+): Buffer {
   const parts: Buffer[] = [];
 
   // Signature type: 1 (2 bytes LE)

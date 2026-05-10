@@ -20,6 +20,30 @@ const envSchema = z.object({
 
   // Attestation signing (optional — skip if not set)
   SIGNING_KEY_PATH: z.string().default(''),
+
+  // Global cap on concurrent outbound gateway fetches. Shared across all
+  // jobs and ad-hoc /verify requests to keep batch jobs from starving
+  // interactive verifies and to dodge gateway 429s.
+  GATEWAY_MAX_INFLIGHT: z.coerce.number().int().positive().default(32),
+
+  // Worker pool concurrency for in-flight verifications per job. Bounded
+  // additionally by GATEWAY_MAX_INFLIGHT — this just caps the per-job fan-out.
+  JOB_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(8),
+
+  // Per-run stall threshold. A run that hasn't recorded a result row in this
+  // long is failed by the stall detector. (Task #18)
+  JOB_STALL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5 * 60 * 1000),
+
+  // How often the stall detector wakes to scan running runs.
+  JOB_STALL_CHECK_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60 * 1000),
 });
 
 export type Config = z.infer<typeof envSchema>;

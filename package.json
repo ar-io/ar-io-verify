@@ -1,7 +1,9 @@
 {
   "name": "ar-io-verify",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "pnpm --filter @ar-io/verify-server run build && pnpm --filter verify-web run build",
     "dev": "pnpm --filter @ar-io/verify-server run dev",

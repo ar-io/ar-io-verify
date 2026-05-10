@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { fetchWithTimeout } from '../utils/http.js';
+import { withGatewayBudget } from './budget.js';
 import type { GatewayTransaction, RawDataHeaders } from './types.js';
 
 const baseUrl = config.GATEWAY_URL.replace(/\/$/, '');
@@ -13,7 +14,7 @@ export async function getTransaction(txId: string): Promise<GatewayTransaction |
   // No retries — /tx/ routes through Envoy to L1 peers, which return 404 immediately
   // for bundled data items. The pipeline falls back to /raw/ headers + GraphQL.
   try {
-    const res = await fetchWithTimeout(`${baseUrl}/tx/${txId}`, timeout);
+    const res = await withGatewayBudget(() => fetchWithTimeout(`${baseUrl}/tx/${txId}`, timeout));
     if (res.status === 404) return null;
     if (!res.ok) {
       logger.warn({ status: res.status, txId }, 'Unexpected response from GET /tx');
@@ -85,7 +86,9 @@ function parseTagHeaders(headers: Headers): Array<{ name: string; value: string 
 
 export async function headRawData(txId: string): Promise<RawDataHeaders | null> {
   try {
-    const res = await fetchWithTimeout(`${baseUrl}/raw/${txId}`, timeout, { method: 'HEAD' });
+    const res = await withGatewayBudget(() =>
+      fetchWithTimeout(`${baseUrl}/raw/${txId}`, timeout, { method: 'HEAD' })
+    );
     if (res.status === 404) {
       return { ...EMPTY_HEADERS };
     }
@@ -142,9 +145,11 @@ export async function getDataItemHeader(
 
   try {
     const rangeEnd = dataOffset - 1;
-    const res = await fetchWithTimeout(`${baseUrl}/raw/${rootTxId}`, timeout, {
-      headers: { Range: `bytes=${dataItemOffset}-${rangeEnd}` },
-    });
+    const res = await withGatewayBudget(() =>
+      fetchWithTimeout(`${baseUrl}/raw/${rootTxId}`, timeout, {
+        headers: { Range: `bytes=${dataItemOffset}-${rangeEnd}` },
+      })
+    );
 
     if (res.status === 206 || res.status === 200) {
       const buf = Buffer.from(await res.arrayBuffer());
@@ -180,7 +185,7 @@ export async function getRawData(
   }
 
   try {
-    const res = await fetchWithTimeout(`${baseUrl}/raw/${txId}`, timeout);
+    const res = await withGatewayBudget(() => fetchWithTimeout(`${baseUrl}/raw/${txId}`, timeout));
     if (!res.ok) return null;
 
     const lengthStr = res.headers.get('content-length');
@@ -214,11 +219,13 @@ export async function getTransactionViaGraphQL(txId: string): Promise<{
 } | null> {
   try {
     const query = `{ transaction(id: "${txId}") { tags { name value } owner { address key } block { height timestamp id } } }`;
-    const res = await fetchWithTimeout(`${baseUrl}/graphql`, timeout, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
-    });
+    const res = await withGatewayBudget(() =>
+      fetchWithTimeout(`${baseUrl}/graphql`, timeout, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      })
+    );
     if (!res.ok) {
       logger.warn({ status: res.status, txId }, 'GraphQL request failed');
       return null;
@@ -248,7 +255,7 @@ export async function getTransactionViaGraphQL(txId: string): Promise<{
 
 export async function checkGatewayHealth(): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${baseUrl}/ar-io/info`, 5000);
+    const res = await withGatewayBudget(() => fetchWithTimeout(`${baseUrl}/ar-io/info`, 5000));
     return res.ok;
   } catch {
     return false;

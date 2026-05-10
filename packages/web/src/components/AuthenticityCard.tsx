@@ -26,7 +26,10 @@ export default function AuthenticityCard({ authenticity, owner }: Props) {
           {owner.address && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-ario-black/40">Signed by</span>
-              <CopyHash value={owner.address} href={`https://viewblock.io/arweave/address/${owner.address}`} />
+              <CopyHash
+                value={owner.address}
+                href={`https://viewblock.io/arweave/address/${owner.address}`}
+              />
             </div>
           )}
 
@@ -64,7 +67,10 @@ export default function AuthenticityCard({ authenticity, owner }: Props) {
           {owner.address && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-ario-black/40">Owner</span>
-              <CopyHash value={owner.address} href={`https://viewblock.io/arweave/address/${owner.address}`} />
+              <CopyHash
+                value={owner.address}
+                href={`https://viewblock.io/arweave/address/${owner.address}`}
+              />
             </div>
           )}
 

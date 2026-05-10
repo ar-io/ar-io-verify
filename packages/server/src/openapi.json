@@ -301,9 +301,204 @@
           }
         }
       }
+    },
+    "/api/v1/jobs": {
+      "post": {
+        "summary": "Create a verification job",
+        "description": "Submit a list of transaction IDs for batch verification. Returns 202 with a job id; the job runs asynchronously. Honors the Idempotency-Key header per tenant — repeated POSTs with the same key return the same job id.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/TenantHeader" },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Optional. Repeats with the same key (per tenant) return the original job id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["txIds"],
+                "properties": {
+                  "txIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{43}$"
+                    },
+                    "description": "Arweave transaction IDs (43-char base64url) to verify."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Job accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": { "type": "string", "example": "job_abc123def456gh" },
+                    "status": { "type": "string", "example": "pending" },
+                    "deduplicated": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid body" },
+          "401": { "description": "Missing X-Tenant-Id header (production mode)" }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}": {
+      "get": {
+        "summary": "Get job status",
+        "description": "Returns job + latest run with counters and ETA. 404 if the job belongs to a different tenant — existence is not leaked.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/TenantHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status snapshot",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobStatusResponse" }
+              }
+            }
+          },
+          "404": { "description": "Job not found" }
+        }
+      },
+      "delete": {
+        "summary": "Cancel a job",
+        "description": "Soft-cancel: marks status='cancelled'. The worker checks per-tx and exits cleanly; recorded results stay queryable.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/TenantHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Cancellation requested" },
+          "404": { "description": "Job not found" },
+          "409": { "description": "Job already in a terminal status (completed/failed/cancelled)" }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}/results": {
+      "get": {
+        "summary": "List per-tx outcomes for a job's latest run",
+        "description": "Cursor-paginated. Each result includes a granular failureReason for tampered/unavailable outcomes — distinguish signature mismatch from gateway timeout etc.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/TenantHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Cursor returned by previous page"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["verified", "tampered", "unavailable"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of per-tx outcomes",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobResultsPage" }
+              }
+            }
+          },
+          "404": { "description": "Job not found" }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}/report": {
+      "get": {
+        "summary": "Get the signed verification bundle for a completed run",
+        "description": "Primary artifact: a canonical-JSON, operator-signed verification bundle, machine-verifiable offline using only the operator's public key. Verifiers reconstruct the canonical JSON of the bundle minus the `signature` and `payloadHash` fields, recompute the SHA-256 to match `payloadHash`, and verify RSA-PSS-SHA256 of `signature` against the operator's public key.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/TenantHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed verification bundle (canonical JSON, byte-identical to what was signed)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/VerificationBundleV1" }
+              }
+            }
+          },
+          "404": { "description": "Job not found, or no completed run yet" },
+          "406": { "description": "PDF view requested but renderer not yet implemented" }
+        }
+      }
+    },
+    "/api/v1/jobs/events": {
+      "get": {
+        "summary": "Pull the tenant's event stream",
+        "description": "Returns events emitted by completed/failed/cancelled runs, ordered by id ascending. Replaces push webhooks for the MVP — consumers poll with `since=<lastSeenEventId>` to advance.",
+        "tags": ["Jobs"],
+        "parameters": [
+          { "$ref": "#/components/parameters/TenantHeader" },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 0 },
+            "description": "Return events with id strictly greater than this value."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of events",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobEventsPage" }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
+    "parameters": {
+      "TenantHeader": {
+        "name": "X-Tenant-Id",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "Opaque tenant identifier injected by whatever sits in front of verify (an API gateway, reverse proxy, etc). Verify never validates the value — it is used purely as a partition key. In NODE_ENV != 'production' this header is optional and a synthetic dev tenant is used."
+      }
+    },
     "schemas": {
       "Error": {
         "type": "object",
@@ -438,12 +633,189 @@
             "description": "Operator's RSA public key (base64url n value)"
           }
         }
+      },
+      "JobStatusResponse": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "status": {
+                "type": "string",
+                "enum": ["pending", "running", "completed", "failed", "cancelled"]
+              },
+              "totalCount": { "type": "integer" },
+              "createdAt": { "type": "integer", "description": "Epoch milliseconds" },
+              "idempotencyKey": { "type": "string", "nullable": true }
+            }
+          },
+          "run": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "status": {
+                "type": "string",
+                "enum": ["running", "completed", "failed", "cancelled"]
+              },
+              "startedAt": { "type": "integer" },
+              "finishedAt": { "type": "integer", "nullable": true },
+              "counters": {
+                "type": "object",
+                "properties": {
+                  "verified": { "type": "integer" },
+                  "tampered": { "type": "integer" },
+                  "unavailable": { "type": "integer" },
+                  "cacheHit": { "type": "integer" },
+                  "bytesFetched": { "type": "integer" }
+                }
+              },
+              "remaining": { "type": "integer" },
+              "etaMs": {
+                "type": "integer",
+                "nullable": true,
+                "description": "Estimated milliseconds remaining based on observed throughput; null if no progress yet."
+              },
+              "summaryBundleId": { "type": "string", "nullable": true }
+            }
+          }
+        }
+      },
+      "JobResultsPage": {
+        "type": "object",
+        "properties": {
+          "runId": { "type": "string" },
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/JobResult" }
+          },
+          "nextCursor": { "type": "string", "nullable": true }
+        }
+      },
+      "JobResult": {
+        "type": "object",
+        "properties": {
+          "txId": { "type": "string" },
+          "verificationId": { "type": "string", "nullable": true },
+          "outcome": {
+            "type": "string",
+            "enum": ["verified", "tampered", "unavailable"]
+          },
+          "cacheHit": { "type": "boolean" },
+          "failureReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "signature_mismatch",
+              "tx_id_mismatch",
+              "data_hash_mismatch",
+              "gateway_timeout",
+              "gateway_5xx",
+              "gateway_404",
+              "binary_header_unavailable",
+              "data_too_large",
+              "no_signature",
+              "job_cancelled",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "JobEventsPage": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/JobEvent" } },
+          "nextCursor": { "type": "string", "nullable": true }
+        }
+      },
+      "JobEvent": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "tenantId": { "type": "string" },
+          "jobId": { "type": "string" },
+          "runId": { "type": "string", "nullable": true },
+          "type": {
+            "type": "string",
+            "enum": ["run.completed", "run.failed", "run.cancelled"]
+          },
+          "payload": { "type": "object" },
+          "createdAt": { "type": "integer" }
+        }
+      },
+      "VerificationBundleV1": {
+        "type": "object",
+        "description": "Canonical, operator-signed verification bundle. Verifiers re-serialize the bundle minus `signature` and `payloadHash`, recompute SHA-256 to match `payloadHash`, then verify RSA-PSS-SHA256 of `signature` against `operatorPublicKey`.",
+        "properties": {
+          "version": { "type": "integer", "enum": [1] },
+          "type": { "type": "string", "enum": ["verify.bundle.run"] },
+          "jobId": { "type": "string" },
+          "runId": { "type": "string" },
+          "tenantId": { "type": "string" },
+          "operator": {
+            "type": "string",
+            "nullable": true,
+            "description": "Arweave wallet address"
+          },
+          "operatorPublicKey": { "type": "string", "nullable": true },
+          "gateway": { "type": "string", "nullable": true },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "finishedAt": { "type": "string", "format": "date-time" },
+          "input": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["txIds"] },
+              "ids": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "verified": { "type": "integer" },
+              "tampered": { "type": "integer" },
+              "unavailable": { "type": "integer" },
+              "cacheHit": { "type": "integer" },
+              "bytesFetched": { "type": "integer" },
+              "total": { "type": "integer" }
+            }
+          },
+          "deltas": {
+            "nullable": true,
+            "type": "object",
+            "description": "Diffs vs the previous run for this job. Always null until scheduled jobs ship (post-MVP).",
+            "properties": {
+              "verified": { "type": "integer" },
+              "tampered": { "type": "integer" },
+              "unavailable": { "type": "integer" }
+            }
+          },
+          "failures": {
+            "type": "array",
+            "description": "Failed-tx detail, capped at 1000 entries. Beyond the cap, query /jobs/:id/results.",
+            "items": { "$ref": "#/components/schemas/JobResult" }
+          },
+          "failuresTruncated": { "type": "boolean" },
+          "payloadHash": {
+            "type": "string",
+            "description": "SHA-256 (base64url) of canonical bundle minus signature and payloadHash fields"
+          },
+          "signature": {
+            "type": "string",
+            "nullable": true,
+            "description": "RSA-PSS-SHA256 signature (base64url). Null if no operator wallet is configured."
+          }
+        }
       }
     }
   },
   "tags": [
     { "name": "Verification", "description": "Verify Arweave transaction data" },
     { "name": "Attestation", "description": "Signed certificates and attestation data" },
+    {
+      "name": "Jobs",
+      "description": "Bulk verification jobs, results, signed bundles, and events"
+    },
     { "name": "System", "description": "Health checks and service info" }
   ]
 }

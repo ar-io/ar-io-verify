@@ -24,7 +24,11 @@ pnpm --filter @ar-io/verify-server run test -- -t "deep hash"
 
 # Deploy alongside an ar.io gateway
 cd deploy && bash start.sh
+# After pulling code changes, force an image rebuild:
+cd deploy && bash start.sh --rebuild
 ```
+
+Filter targets: server = `@ar-io/verify-server`, web = `verify-web`.
 
 Tests live in `packages/server/tests/` (mirrors `src/` layout), not co-located with source files.
 
@@ -32,7 +36,7 @@ Tests live in `packages/server/tests/` (mirrors `src/` layout), not co-located w
 
 ```
 packages/
-  server/    Express server: verification pipeline, PDF certificates, SQLite cache, attestation signing
+  server/    Express server: verification pipeline, PDF certificates, SQLite cache, attestation signing, batch jobs
   web/       React 19 + Vite frontend: verification UI (Tailwind CSS, served at /verify/)
 deploy/      Standalone Docker Compose deployment
 ```
@@ -45,12 +49,32 @@ deploy/      Standalone Docker Compose deployment
 4. Signature verification: RSA-PSS (type 1), ED25519 (type 2), Ethereum ECDSA (type 3)
 5. Operator attestation — sign result with gateway wallet
 
+**Batch verification jobs** (`packages/server/src/pipeline/job-worker.ts` + `routes/jobs.ts`):
+
+- `POST /api/v1/jobs` accepts `{ txIds: string[] }`, returns 202 + `{ jobId }`. Honors `Idempotency-Key` per tenant.
+- Worker pool (in-process) drains jobs concurrently. Per-job fan-out is bounded by `JOB_WORKER_CONCURRENCY` (default 8); the actual ceiling on outbound fetches is the **global gateway budget** semaphore in `gateway/budget.ts` (`GATEWAY_MAX_INFLIGHT`, default 32). Both batch jobs and ad-hoc `/verify` share that budget.
+- Each tx hits the verification cache first (`storage/cache.ts`) and only runs the pipeline on cache miss. The cache stores **only permanent outcomes** (verified / tampered) — transient unavailables are NOT cached, so re-runs retry rather than replaying stale "unavailable" answers.
+- Worker writes per-tx outcomes (`verified` / `tampered` / `unavailable`) with granular `failure_reason` (e.g. `signature_mismatch`, `tx_id_mismatch`, `gateway_timeout`, `gateway_404`, `data_too_large`, `binary_header_unavailable`).
+- On run completion, builds + signs a **VerificationBundleV1** — canonical-JSON, operator-signed, schema-versioned, machine-verifiable offline. PDF view of the same bundle is post-MVP (returns 406).
+- Emits pull-based events to `job_events` table (`run.completed | run.failed | run.cancelled`). Consumers poll `GET /api/v1/jobs/events?since=…`. No outbound webhooks.
+- Stall detector (`startStallDetector`) fails any run that hasn't recorded progress within `JOB_STALL_MS` (default 5 min).
+- Restart resilience: `sweepStaleRunning` resets `running` → `pending` on boot; `resumePending` re-enqueues. Within a resumed run, already-completed txIds are skipped (partial-run resume).
+
+**Tenancy model:** Verify is multi-tenant by an opaque `X-Tenant-Id` header injected by whatever sits in front (an API gateway, reverse proxy, etc). Verify itself does **not** authenticate, validate, rate-limit, quota, or interpret the value — it is purely a partition key. In `NODE_ENV != 'production'`, missing tenant header falls back to a synthetic dev tenant so the sidecar can be exercised standalone. See `middleware/tenant.ts`.
+
 **Key files:**
 
 - `server/src/utils/crypto.ts` — deep hash, RSA-PSS, ED25519, ECDSA, Avro tag serialization
 - `server/src/utils/ans104-parser.ts` — ANS-104 binary header parser
-- `server/src/utils/signing.ts` — JWK loader, attestation builder, RSA-PSS signer (standard single-hash: `createSign('sha256').update(canonical)`)
-- `server/src/gateway/client.ts` — gateway API client (HEAD, GET, GraphQL, range requests)
+- `server/src/utils/signing.ts` — JWK loader, attestation + bundle signer, deep canonicalization
+- `server/src/gateway/client.ts` — gateway API client (HEAD, GET, GraphQL, range requests; all wrapped in the global budget)
+- `server/src/gateway/budget.ts` — process-wide semaphore over outbound gateway fetches
+- `server/src/storage/db.ts` — shared SQLite connection (WAL mode)
+- `server/src/storage/jobs.ts` — jobs / runs / results / events / bundles repository
+- `server/src/pipeline/job-worker.ts` — worker pool, stall detector, partial-run resume, cancellation
+- `server/src/pipeline/bundle.ts` — VerificationBundleV1 builder + signer
+- `server/src/pipeline/outcome.ts` — VerificationResult → (outcome, failureReason) mapping
+- `server/src/middleware/tenant.ts` — `X-Tenant-Id` extraction
 - `server/src/openapi.json` — OpenAPI 3.0 spec (served at /api-docs/)
 
 ## Critical Notes
@@ -65,16 +89,35 @@ deploy/      Standalone Docker Compose deployment
 8. When running in Docker, `GATEWAY_URL` must NOT be `localhost`/`127.0.0.1` — config validation in `server/src/config.ts` rejects it on startup. Use the gateway service hostname (e.g. `http://core:4000`) on the shared `ar-io-network`.
 9. Env config is parsed with zod in `server/src/config.ts` — add new env vars there, not ad-hoc `process.env` reads.
 10. Frontend image previews read `publicGatewayUrl` from `GET /api/config`. Resolution order: `PUBLIC_GATEWAY_URL` → `https://${GATEWAY_HOST}` → `https://turbo-gateway.com`. The sidecar no longer proxies `/raw/` — image loads go directly to the gateway.
+11. The pipeline verifies `SHA-256(signature) == requested txId` (see `pipeline/orchestrator.ts`). This is a deliberate substitution check — a malicious gateway can return valid-looking data for the wrong txId, and this catches it. Do not remove as "redundant."
+12. The verification cache (`storage/cache.ts`) only stores **permanent outcomes** (verified / tampered). Transient `unavailable` results are intentionally NOT cached so future re-verifications retry. Don't "fix" `saveResult` to cache everything — the change-detection signal depends on this filter.
+13. `signing.ts:canonicalize` is **deep recursive**. Sorts keys at every level. Arrays preserve order (array order is semantic). Both per-tx attestations and run bundles depend on this — verifier compatibility hinges on byte-identical canonicalization.
+14. The bundle artifact (`pipeline/bundle.ts`) is the primary output of a job, NOT a PDF. PDF view is post-MVP and returns 406 today. Verifiers re-canonicalize the bundle minus `signature` + `payloadHash`, recompute SHA-256 to match `payloadHash`, then verify RSA-PSS-SHA256 against `operatorPublicKey`.
+15. Verify never knows about auth, tier, billing, or rate limits — those are upstream concerns. The only thing verify reads from request headers (besides `Idempotency-Key`) is `X-Tenant-Id`, which it treats as opaque.
 
 ## API Endpoints
 
 Interactive docs at `/api-docs/` (Swagger UI).
+
+Single-tx (no auth — direct):
 
 - `POST /api/v1/verify` — verify a transaction
 - `GET /api/v1/verify/:id` — get cached result
 - `GET /api/v1/verify/tx/:txId` — verification history
 - `GET /api/v1/verify/:id/pdf` — PDF certificate
 - `GET /api/v1/verify/:id/attestation` — attestation for programmatic verification
+
+Batch jobs (require `X-Tenant-Id` header):
+
+- `POST /api/v1/jobs` — submit txIds for batch verification (honors `Idempotency-Key`)
+- `GET /api/v1/jobs/:id` — status + counters + ETA
+- `GET /api/v1/jobs/:id/results` — paginated per-tx outcomes with granular failure reasons
+- `GET /api/v1/jobs/:id/report` — signed verification bundle (canonical JSON)
+- `GET /api/v1/jobs/events?since=…` — pull-based event stream
+- `DELETE /api/v1/jobs/:id` — soft-cancel
+
+Misc:
+
 - `GET /api/config` — runtime frontend config (public gateway URL for image previews)
 - `GET /health` — health check
 
