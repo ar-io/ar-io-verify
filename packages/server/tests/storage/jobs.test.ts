@@ -217,7 +217,7 @@ describeIfAvailable('jobs store', () => {
     expect(bEvents.items[0].type).toBe('run.failed');
   });
 
-  it('sweepStaleRunning resets in-flight jobs and runs after a crash', () => {
+  it('sweepStaleRunning resets job to pending and preserves run status for resume', () => {
     const { job } = jobsModule!.createJob({
       tenantId: 'tenant_a',
       idempotencyKey: null,
@@ -232,8 +232,81 @@ describeIfAvailable('jobs store', () => {
     expect(swept.jobs).toBeGreaterThanOrEqual(1);
     expect(swept.runs).toBeGreaterThanOrEqual(1);
 
+    // Job is reset to pending so the worker re-enqueues it. The run stays
+    // 'running' so getCompletedTxIds(run.id) preserves prior progress —
+    // this is what makes partial-run resume actually work after a crash.
     expect(jobsModule!.findJobById(job.id)!.status).toBe('pending');
-    expect(jobsModule!.getRun(run.id)!.status).toBe('failed');
+    expect(jobsModule!.getRun(run.id)!.status).toBe('running');
+  });
+
+  it('terminal-state transitions are status-conditional', () => {
+    const { job } = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids: ['t1'] },
+      totalCount: 1,
+    });
+    const run = jobsModule!.startRun(job.id);
+
+    // First terminal transition wins.
+    expect(jobsModule!.completeRun(run.id, null)).toBe(true);
+    // Second one (stall detector firing late) is a no-op.
+    expect(jobsModule!.failRun(run.id, 'stalled')).toBe(false);
+    expect(jobsModule!.cancelRun(run.id)).toBe(false);
+    // Run stays in its first terminal state.
+    expect(jobsModule!.getRun(run.id)!.status).toBe('completed');
+  });
+
+  it('bumpRunCounters and recordResult are no-ops once the run is terminal', () => {
+    const { job } = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids: ['t1'] },
+      totalCount: 1,
+    });
+    const run = jobsModule!.startRun(job.id);
+    jobsModule!.cancelRun(run.id);
+    // A late-arriving processOne tries to record under a cancelled run.
+    jobsModule!.recordResult({
+      jobRunId: run.id,
+      txId: 't_late',
+      verificationId: 'v',
+      outcome: 'verified',
+      cacheHit: false,
+      failureReason: null,
+    });
+    jobsModule!.bumpRunCounters(run.id, { verified: 1 });
+    // Result was dropped, counters didn't move.
+    expect(jobsModule!.listResults(run.id).items.length).toBe(0);
+    expect(jobsModule!.getRun(run.id)!.verifiedCount).toBe(0);
+  });
+
+  it('pruneOldJobs deletes jobs older than the cutoff and cascades children', () => {
+    const old = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids: ['t1'] },
+      totalCount: 1,
+    }).job;
+    const fresh = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids: ['t2'] },
+      totalCount: 1,
+    }).job;
+    // Force the old job's created_at into the past.
+    dbModule!
+      .getDb()
+      .prepare(`UPDATE jobs SET created_at = ? WHERE id = ?`)
+      .run(Date.now() - 40 * 86_400_000, old.id);
+    const pruned = jobsModule!.pruneOldJobs(30 * 86_400_000);
+    expect(pruned.jobs).toBe(1);
+    expect(jobsModule!.findJobById(old.id)).toBeNull();
+    expect(jobsModule!.findJobById(fresh.id)).not.toBeNull();
   });
 
   it('saves and retrieves a verification bundle by run id', () => {

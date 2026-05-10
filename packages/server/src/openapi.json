@@ -328,11 +328,12 @@
                   "txIds": {
                     "type": "array",
                     "minItems": 1,
+                    "maxItems": 50000,
                     "items": {
                       "type": "string",
                       "pattern": "^[A-Za-z0-9_-]{43}$"
                     },
-                    "description": "Arweave transaction IDs (43-char base64url) to verify."
+                    "description": "Arweave transaction IDs (43-char base64url) to verify. Up to 50,000 per job; total request body is capped at 16 MB."
                   }
                 }
               }

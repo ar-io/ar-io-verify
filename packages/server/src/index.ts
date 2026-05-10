@@ -8,7 +8,7 @@ import { config, resolvePublicGatewayUrl } from './config.js';
 import { logger } from './utils/logger.js';
 import { initDb, closeDb } from './storage/db.js';
 import { initCache, closeCache } from './storage/cache.js';
-import { initJobsStore, sweepStaleRunning } from './storage/jobs.js';
+import { initJobsStore, sweepStaleRunning, pruneOldJobs } from './storage/jobs.js';
 import { resumePending, startStallDetector, stopStallDetector } from './pipeline/job-worker.js';
 import { initSigning } from './utils/signing.js';
 import healthRouter from './routes/health.js';
@@ -19,7 +19,11 @@ const app = express();
 
 // Middleware
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+// 16 MB JSON body covers a job submission of up to MAX_TX_IDS_PER_JOB (50k)
+// at ~50 bytes/txId. Express defaults to 100 KB, which would silently 413
+// any meaningful batch job before zod validation gets a chance to surface
+// a useful error.
+app.use(express.json({ limit: '16mb' }));
 
 // API routes — mounted under a sub-router so we can serve at both '/' and '/verify/'
 // This supports two access paths:
@@ -120,10 +124,42 @@ if (existsSync(webDistPath)) {
   });
 }
 
+// Periodic pruner for jobs/runs/results/events. Cascades through ON DELETE
+// CASCADE so trimming jobs trims their child rows. Mirrors the existing
+// verification-results cache prune cadence.
+const JOBS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const JOBS_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let jobsPruneTimer: ReturnType<typeof setInterval> | null = null;
+
+function startJobsPruner(): void {
+  if (jobsPruneTimer) return;
+  const tick = (): void => {
+    try {
+      const result = pruneOldJobs(JOBS_RETENTION_MS);
+      if (result.jobs > 0 || result.events > 0) {
+        logger.info(result, 'Pruned old jobs/events');
+      }
+    } catch (err) {
+      logger.error({ err }, 'Failed to prune old jobs');
+    }
+  };
+  tick();
+  jobsPruneTimer = setInterval(tick, JOBS_PRUNE_INTERVAL_MS);
+  if (typeof jobsPruneTimer.unref === 'function') jobsPruneTimer.unref();
+}
+
+function stopJobsPruner(): void {
+  if (jobsPruneTimer) {
+    clearInterval(jobsPruneTimer);
+    jobsPruneTimer = null;
+  }
+}
+
 // Graceful shutdown
 async function shutdown() {
   logger.info('Shutting down...');
   stopStallDetector();
+  stopJobsPruner();
   closeCache();
   closeDb();
   process.exit(0);
@@ -150,6 +186,7 @@ try {
   // previous process that never got picked up).
   resumePending();
   startStallDetector();
+  startJobsPruner();
 
   app.listen(config.PORT, () => {
     logger.info(`Verify Sidecar running at http://localhost:${config.PORT}`);

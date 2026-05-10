@@ -38,7 +38,7 @@ class Semaphore {
     }
   }
 
-  inflight(): number {
+  queueDepth(): number {
     return this.waiting.length;
   }
 }
@@ -58,6 +58,7 @@ export async function withGatewayBudget<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function gatewayBudgetWaiting(): number {
-  return budget.inflight();
+/** Number of fetches currently parked waiting for a budget permit. */
+export function gatewayBudgetQueueDepth(): number {
+  return budget.queueDepth();
 }

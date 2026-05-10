@@ -51,16 +51,20 @@ deploy/      Standalone Docker Compose deployment
 
 **Batch verification jobs** (`packages/server/src/pipeline/job-worker.ts` + `routes/jobs.ts`):
 
-- `POST /api/v1/jobs` accepts `{ txIds: string[] }`, returns 202 + `{ jobId }`. Honors `Idempotency-Key` per tenant.
+- `POST /api/v1/jobs` accepts `{ txIds: string[] }` (max 50,000 per job, request body capped at 16 MB), returns 202 + `{ jobId }`. Honors `Idempotency-Key` per tenant (printable ASCII, ≤128 chars).
 - Worker pool (in-process) drains jobs concurrently. Per-job fan-out is bounded by `JOB_WORKER_CONCURRENCY` (default 8); the actual ceiling on outbound fetches is the **global gateway budget** semaphore in `gateway/budget.ts` (`GATEWAY_MAX_INFLIGHT`, default 32). Both batch jobs and ad-hoc `/verify` share that budget.
 - Each tx hits the verification cache first (`storage/cache.ts`) and only runs the pipeline on cache miss. The cache stores **only permanent outcomes** (verified / tampered) — transient unavailables are NOT cached, so re-runs retry rather than replaying stale "unavailable" answers.
 - Worker writes per-tx outcomes (`verified` / `tampered` / `unavailable`) with granular `failure_reason` (e.g. `signature_mismatch`, `tx_id_mismatch`, `gateway_timeout`, `gateway_404`, `data_too_large`, `binary_header_unavailable`).
 - On run completion, builds + signs a **VerificationBundleV1** — canonical-JSON, operator-signed, schema-versioned, machine-verifiable offline. PDF view of the same bundle is post-MVP (returns 406).
 - Emits pull-based events to `job_events` table (`run.completed | run.failed | run.cancelled`). Consumers poll `GET /api/v1/jobs/events?since=…`. No outbound webhooks.
 - Stall detector (`startStallDetector`) fails any run that hasn't recorded progress within `JOB_STALL_MS` (default 5 min).
-- Restart resilience: `sweepStaleRunning` resets `running` → `pending` on boot; `resumePending` re-enqueues. Within a resumed run, already-completed txIds are skipped (partial-run resume).
+- Restart resilience: `sweepStaleRunning` resets `running` → `pending` on boot but **leaves `job_runs` rows in `running` status** so `getCompletedTxIds(run.id)` correctly preserves prior progress. `resumePending` re-enqueues. Already-completed txIds are skipped on resume (real partial-run resume — without preserving the run row this is dead code).
+- All terminal-state transitions on `job_runs` (`completeRun`, `failRun`, `cancelRun`) and counter mutations (`bumpRunCounters`, `recordResult`) are **status-conditional** (`WHERE status='running'`). Late-arriving worker writes after cancellation/stall are dropped rather than poisoning a terminal run.
+- `pruneOldJobs` runs on a 6-hour interval; jobs older than `JOBS_RETENTION_MS` (30 days) are deleted and child rows cascade. `job_events` are pruned by age (no FK).
 
-**Tenancy model:** Verify is multi-tenant by an opaque `X-Tenant-Id` header injected by whatever sits in front (an API gateway, reverse proxy, etc). Verify itself does **not** authenticate, validate, rate-limit, quota, or interpret the value — it is purely a partition key. In `NODE_ENV != 'production'`, missing tenant header falls back to a synthetic dev tenant so the sidecar can be exercised standalone. See `middleware/tenant.ts`.
+**Tenancy model:** Verify is multi-tenant by an opaque `X-Tenant-Id` header injected by whatever sits in front (an API gateway, reverse proxy, etc). Verify itself does **not** authenticate, rate-limit, quota, or interpret the value — it is purely a partition key. The middleware does enforce a length+charset envelope (`^[A-Za-z0-9_.:-]{1,128}$`) so the value can't bloat the unique idempotency index. In `NODE_ENV != 'production'`, missing tenant header falls back to a synthetic dev tenant so the sidecar can be exercised standalone. See `middleware/tenant.ts`.
+
+**Single-process only.** The worker pool keeps in-memory state (`inflightJobs` set, semaphore permits) and SQLite is local. Don't run two replicas against the same DB — there's no row-level lock between processes that picks `pending` jobs. Horizontal scaling is post-MVP and tracked via the federation roadmap item.
 
 **Key files:**
 
@@ -94,6 +98,8 @@ deploy/      Standalone Docker Compose deployment
 13. `signing.ts:canonicalize` is **deep recursive**. Sorts keys at every level. Arrays preserve order (array order is semantic). Both per-tx attestations and run bundles depend on this — verifier compatibility hinges on byte-identical canonicalization.
 14. The bundle artifact (`pipeline/bundle.ts`) is the primary output of a job, NOT a PDF. PDF view is post-MVP and returns 406 today. Verifiers re-canonicalize the bundle minus `signature` + `payloadHash`, recompute SHA-256 to match `payloadHash`, then verify RSA-PSS-SHA256 against `operatorPublicKey`.
 15. Verify never knows about auth, tier, billing, or rate limits — those are upstream concerns. The only thing verify reads from request headers (besides `Idempotency-Key`) is `X-Tenant-Id`, which it treats as opaque.
+16. Job request body limit is **16 MB** (`express.json({ limit: '16mb' })`) and the per-job txId cap is **50,000**. Both must move together — bumping zod's `max(50_000)` without lifting the body limit produces silent 413 errors before zod validation runs. Keep them aligned.
+17. Status-conditional UPDATEs are load-bearing for cancellation correctness. Don't simplify `WHERE id = ? AND status = 'running'` to `WHERE id = ?` in `bumpRunCounters` / `recordResult` / `completeRun` / `failRun` / `cancelRun` — late-arriving worker writes will resurrect cancelled runs.
 
 ## API Endpoints
 

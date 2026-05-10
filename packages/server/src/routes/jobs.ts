@@ -10,9 +10,19 @@ const router: RouterType = Router();
 router.use(requireTenant());
 
 const TX_ID_PATTERN = /^[a-zA-Z0-9_-]{43}$/;
+// Conservative cap. At ~50 bytes/txId in JSON, 50k IDs ≈ 2.5 MB — well under
+// the 16 MB body limit configured in index.ts. Bumped here without bumping
+// the body limit will produce confusing 413s before zod runs.
+const MAX_TX_IDS_PER_JOB = 50_000;
+
+// Bound the Idempotency-Key so it can't bloat the unique index. Per the
+// IETF RFC draft, implementations can require this to be a UUID; we accept
+// any printable ASCII up to 128 chars so callers can pass UUIDs, KSUIDs,
+// or composite keys.
+const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7E]{1,128}$/;
 
 const CreateJobBody = z.object({
-  txIds: z.array(z.string().regex(TX_ID_PATTERN)).min(1).max(1_000_000),
+  txIds: z.array(z.string().regex(TX_ID_PATTERN)).min(1).max(MAX_TX_IDS_PER_JOB),
 });
 
 /**
@@ -31,6 +41,10 @@ router.post('/', (req, res) => {
   }
 
   const idempotencyKey = req.header('idempotency-key') ?? null;
+  if (idempotencyKey !== null && !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
+    res.status(400).json({ error: 'invalid_idempotency_key' });
+    return;
+  }
   const result = jobs.createJob({
     tenantId: tenant.tenantId,
     idempotencyKey,

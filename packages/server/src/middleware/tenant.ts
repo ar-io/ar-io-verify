@@ -13,6 +13,13 @@ export interface TenantContext {
 const TENANT_HEADER = 'x-tenant-id';
 const DEV_FALLBACK_TENANT = 'tenant_dev_local';
 
+// Conservative envelope for the opaque tenant id. Verify never validates the
+// value semantically — but it does end up as a primary-key column and partial
+// unique index, so we cap length and charset to keep the index well-behaved
+// and reject obvious garbage. 128 chars / [A-Za-z0-9_.:-] covers any sane
+// upstream identity scheme (UUIDs, KSUIDs, opaque hex, etc).
+const TENANT_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
 // Symbol-keyed slot on the request — avoids fragile module augmentation
 // while still preventing accidental collisions with other middleware.
 const TENANT_SLOT: unique symbol = Symbol.for('ar-io-verify.tenant');
@@ -37,6 +44,11 @@ export function requireTenant(): RequestHandler {
         return next();
       }
       res.status(401).json({ error: 'Missing X-Tenant-Id header' });
+      return;
+    }
+
+    if (!TENANT_ID_PATTERN.test(tenantId)) {
+      res.status(400).json({ error: 'Invalid X-Tenant-Id format' });
       return;
     }
 

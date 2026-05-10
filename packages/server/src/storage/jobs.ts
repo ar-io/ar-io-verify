@@ -487,8 +487,13 @@ export function listPendingJobs(): Job[] {
 }
 
 /**
- * On boot, reset any jobs/runs that were marked 'running' when the process died.
- * Called once during startup before the worker pool resumes.
+ * On boot, reset any jobs that were marked 'running' when the process died so
+ * the worker pool re-enqueues them. The associated run rows stay in 'running'
+ * status — `runJob` reuses them and `getCompletedTxIds(run.id)` correctly
+ * skips already-recorded txIds (real partial-run resume).
+ *
+ * `last_progress_at` is bumped to now so the stall detector doesn't
+ * immediately fail a run that just got picked back up.
  */
 export function sweepStaleRunning(): { jobs: number; runs: number } {
   const db = getDb();
@@ -496,13 +501,26 @@ export function sweepStaleRunning(): { jobs: number; runs: number } {
     .prepare(`UPDATE jobs SET status = 'pending' WHERE status = 'running'`)
     .run();
   const runsResult = db
-    .prepare(
-      `UPDATE job_runs SET status = 'failed', failure_reason = 'interrupted_restart',
-                            finished_at = ?
-       WHERE status = 'running'`
-    )
+    .prepare(`UPDATE job_runs SET last_progress_at = ? WHERE status = 'running'`)
     .run(Date.now());
   return { jobs: jobsResult.changes, runs: runsResult.changes };
+}
+
+/**
+ * Delete jobs older than `retentionMs` along with their cascaded runs/results/
+ * bundles, plus events older than the same cutoff. Caller is responsible for
+ * scheduling. Returns counts deleted (for logging).
+ */
+export function pruneOldJobs(retentionMs: number): { jobs: number; events: number } {
+  const cutoff = Date.now() - retentionMs;
+  const db = getDb();
+  // ON DELETE CASCADE on job_runs / job_results / verification_bundles
+  // takes care of the transitive cleanup.
+  const j = db.prepare(`DELETE FROM jobs WHERE created_at < ?`).run(cutoff);
+  // job_events has no FK back to jobs (events outlive their jobs by design),
+  // so prune by age explicitly.
+  const e = db.prepare(`DELETE FROM job_events WHERE created_at < ?`).run(cutoff);
+  return { jobs: j.changes, events: e.changes };
 }
 
 // ---------------------------------------------------------------------------
@@ -549,34 +567,47 @@ export function getLatestRunForJob(jobId: string): JobRun | null {
   return row ? rowToRun(row) : null;
 }
 
-export function completeRun(runId: string, summaryBundleId: string | null): void {
-  getDb()
+/**
+ * All terminal-state transitions are conditional on the run still being
+ * 'running' so concurrent transitions (worker complete + stall detector +
+ * cancellation) can't trample each other. Returns true if the transition
+ * actually happened.
+ */
+export function completeRun(runId: string, summaryBundleId: string | null): boolean {
+  const r = getDb()
     .prepare(
       `UPDATE job_runs
        SET status = 'completed', finished_at = ?, summary_bundle_id = ?
-       WHERE id = ?`
+       WHERE id = ? AND status = 'running'`
     )
     .run(Date.now(), summaryBundleId, runId);
+  return r.changes > 0;
 }
 
-export function failRun(runId: string, reason: string): void {
-  getDb()
+export function failRun(runId: string, reason: string): boolean {
+  const r = getDb()
     .prepare(
       `UPDATE job_runs SET status = 'failed', finished_at = ?, failure_reason = ?
-       WHERE id = ?`
+       WHERE id = ? AND status = 'running'`
     )
     .run(Date.now(), reason, runId);
+  return r.changes > 0;
 }
 
-export function cancelRun(runId: string): void {
-  getDb()
+export function cancelRun(runId: string): boolean {
+  const r = getDb()
     .prepare(
       `UPDATE job_runs SET status = 'cancelled', finished_at = ?, failure_reason = 'job_cancelled'
-       WHERE id = ?`
+       WHERE id = ? AND status = 'running'`
     )
     .run(Date.now(), runId);
+  return r.changes > 0;
 }
 
+/**
+ * Bump per-run counters. No-op if the run is no longer 'running' — prevents
+ * a late-arriving processOne from mutating a cancelled or completed run.
+ */
 export function bumpRunCounters(runId: string, deltas: RunCounterDeltas): void {
   getDb()
     .prepare(
@@ -587,7 +618,7 @@ export function bumpRunCounters(runId: string, deltas: RunCounterDeltas): void {
            cache_hit_count   = cache_hit_count   + ?,
            bytes_fetched     = bytes_fetched     + ?,
            last_progress_at  = ?
-       WHERE id = ?`
+       WHERE id = ? AND status = 'running'`
     )
     .run(
       deltas.verified ?? 0,
@@ -626,12 +657,18 @@ export interface RecordResultInput {
   failureReason: FailureReason | null;
 }
 
+/**
+ * Record a per-tx outcome. Only inserts if the run is still 'running' — late-
+ * arriving results from in-flight verifies that started before cancellation
+ * are dropped rather than silently appearing under a cancelled run.
+ */
 export function recordResult(input: RecordResultInput): void {
   getDb()
     .prepare(
       `INSERT OR REPLACE INTO job_results
         (job_run_id, tx_id, verification_id, outcome, cache_hit, failure_reason)
-       VALUES (?, ?, ?, ?, ?, ?)`
+       SELECT ?, ?, ?, ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM job_runs WHERE id = ? AND status = 'running')`
     )
     .run(
       input.jobRunId,
@@ -639,7 +676,8 @@ export function recordResult(input: RecordResultInput): void {
       input.verificationId,
       input.outcome,
       input.cacheHit ? 1 : 0,
-      input.failureReason
+      input.failureReason,
+      input.jobRunId
     );
 }
 

@@ -273,6 +273,43 @@ describeIfAvailable('job worker', () => {
     expect(pages).toBeGreaterThan(1); // proves pagination actually had to advance
   });
 
+  it('resumes after a real crash recovery path (sweep + worker re-pickup)', async () => {
+    const { job } = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids: ['ok_alpha', 'ok_beta', 'ok_gamma'] },
+      totalCount: 3,
+    });
+    // Simulate the worker having processed one tx before the process died.
+    jobsModule!.updateJobStatus(job.id, 'running');
+    const run = jobsModule!.startRun(job.id);
+    jobsModule!.recordResult({
+      jobRunId: run.id,
+      txId: 'ok_alpha',
+      verificationId: 'vrf_pre',
+      outcome: 'verified',
+      cacheHit: false,
+      failureReason: null,
+    });
+    jobsModule!.bumpRunCounters(run.id, { verified: 1 });
+
+    // Boot-time recovery: sweep flips the job back to 'pending' but leaves
+    // the run alive at 'running' so the worker can resume it.
+    jobsModule!.sweepStaleRunning();
+    expect(jobsModule!.findJobById(job.id)!.status).toBe('pending');
+    expect(jobsModule!.getRun(run.id)!.status).toBe('running');
+
+    await workerModule!.runJob(job.id);
+    // Only the two unfinished txs should hit the pipeline.
+    expect(verifyCalls.sort()).toEqual(['ok_beta', 'ok_gamma']);
+
+    const final = jobsModule!.getLatestRunForJob(job.id)!;
+    expect(final.status).toBe('completed');
+    // The pre-crash result is preserved AND counted.
+    expect(final.verifiedCount).toBe(3);
+  });
+
   it('stall detector fails runs with no progress past the threshold', async () => {
     const { job } = jobsModule!.createJob({
       tenantId: 'tenant_a',
