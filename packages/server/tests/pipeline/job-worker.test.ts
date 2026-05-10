@@ -242,6 +242,37 @@ describeIfAvailable('job worker', () => {
     expect(final.status).toBe('completed');
   });
 
+  it('handles a 250-tx job and produces consistent counters + paginated results', async () => {
+    const ids = Array.from({ length: 250 }, (_, i) =>
+      i % 4 === 0 ? `bad_bulk_${i}` : i % 7 === 0 ? `gone_bulk_${i}` : `ok_bulk_${i}`
+    );
+    const { job } = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids },
+      totalCount: ids.length,
+    });
+    await workerModule!.runJob(job.id);
+
+    expect(jobsModule!.findJobById(job.id)!.status).toBe('completed');
+    const run = jobsModule!.getLatestRunForJob(job.id)!;
+    expect(run.verifiedCount + run.failedCount + run.unavailableCount).toBe(250);
+
+    // Walk all pages of the results endpoint and confirm full coverage.
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = jobsModule!.listResults(run.id, { limit: 100, cursor });
+      for (const r of page.items) seen.add(r.txId);
+      cursor = page.nextCursor ?? undefined;
+      pages++;
+    } while (cursor);
+    expect(seen.size).toBe(250);
+    expect(pages).toBeGreaterThan(1); // proves pagination actually had to advance
+  });
+
   it('stall detector fails runs with no progress past the threshold', async () => {
     const { job } = jobsModule!.createJob({
       tenantId: 'tenant_a',

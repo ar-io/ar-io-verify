@@ -146,6 +146,37 @@ describeIfAvailable('verification bundle', () => {
     expect(signature).toBeNull(); // no wallet in this test
   });
 
+  it('caps failures at 1000 and sets failuresTruncated when there are more', () => {
+    const ids = Array.from({ length: 1100 }, (_, i) => `tx_${i.toString().padStart(4, '0')}`);
+    const { job } = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids },
+      totalCount: ids.length,
+    });
+    const run = jobsModule!.startRun(job.id);
+    for (const id of ids) {
+      jobsModule!.recordResult({
+        jobRunId: run.id,
+        txId: id,
+        verificationId: null,
+        outcome: 'tampered',
+        cacheHit: false,
+        failureReason: 'signature_mismatch',
+      });
+    }
+    jobsModule!.bumpRunCounters(run.id, { failed: 1100 });
+    jobsModule!.completeRun(run.id, null);
+
+    const bundle = bundleModule!.buildBundle(job.id, run.id)!;
+    expect(bundle.failures.length).toBe(1000);
+    expect(bundle.failuresTruncated).toBe(true);
+    // The totals still reflect the real count — the cap is only on the
+    // embedded list. Customers retrieve the rest via /jobs/:id/results.
+    expect(bundle.totals.tampered).toBe(1100);
+  });
+
   it('returns null when the run does not exist', () => {
     expect(bundleModule!.buildBundle('job_nope', 'run_nope')).toBeNull();
   });
