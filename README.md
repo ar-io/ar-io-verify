@@ -103,6 +103,8 @@ location /local/verify/ {
 
 Interactive docs: `/api-docs/`
 
+### Single-transaction verification
+
 | Method | Path                             | Description                                   |
 | ------ | -------------------------------- | --------------------------------------------- |
 | `POST` | `/api/v1/verify`                 | Verify a transaction                          |
@@ -110,11 +112,33 @@ Interactive docs: `/api-docs/`
 | `GET`  | `/api/v1/verify/tx/:txId`        | Get history for a transaction                 |
 | `GET`  | `/api/v1/verify/:id/pdf`         | Download PDF certificate                      |
 | `GET`  | `/api/v1/verify/:id/attestation` | Get attestation for programmatic verification |
-| `GET`  | `/api/config`                    | Runtime frontend config (public gateway URL)  |
-| `GET`  | `/health`                        | Health check                                  |
-| `GET`  | `/api-docs/`                     | Swagger UI                                    |
 
-Results are cached in SQLite, so repeated lookups for the same transaction return instantly.
+Results are cached in SQLite, so repeated lookups for the same transaction return instantly. Only permanent outcomes (verified / tampered) are cached — transient gateway failures retry on the next request.
+
+### Batch verification jobs
+
+For verifying many transactions in one shot — periodic audits, archival sweeps, dapp upload reconciliation — the sidecar exposes a batch jobs API. Submit a list of txIds, get back a single **operator-signed verification bundle** that proves the run's results offline.
+
+| Method   | Path                       | Description                                                                |
+| -------- | -------------------------- | -------------------------------------------------------------------------- |
+| `POST`   | `/api/v1/jobs`             | Submit a job (up to 50,000 txIds, 16 MB body, honors `Idempotency-Key`)    |
+| `GET`    | `/api/v1/jobs/:id`         | Status + counters + ETA                                                    |
+| `GET`    | `/api/v1/jobs/:id/results` | Paginated per-tx outcomes with granular `failureReason`                    |
+| `GET`    | `/api/v1/jobs/:id/report`  | Signed verification bundle (canonical JSON)                                |
+| `DELETE` | `/api/v1/jobs/:id`         | Cancel a pending or running job                                            |
+| `GET`    | `/api/v1/jobs/events`      | Pull-based event stream (`run.completed` / `run.failed` / `run.cancelled`) |
+
+**Multi-tenant.** The batch jobs API is scoped by an opaque `X-Tenant-Id` header. Verify trusts whatever sits in front of it (an API gateway, reverse proxy, etc.) to authenticate, rate-limit, and inject that header — it doesn't itself enforce auth, tiers, quotas, or rate limits. Two tenants can submit jobs against the same sidecar without seeing each other's data.
+
+**The verification bundle is the primary artifact.** It's a canonical-JSON document signed RSA-PSS-SHA256 with the operator's wallet. A verifier with only the operator's public key can confirm authenticity offline — re-canonicalize (deep-sort keys, no whitespace), recompute SHA-256 of the bundle minus `signature` and `payloadHash`, match `payloadHash`, then verify the signature. See `deploy/smoke-jobs.sh` for a reference implementation.
+
+### Misc
+
+| Method | Path          | Description                                  |
+| ------ | ------------- | -------------------------------------------- |
+| `GET`  | `/api/config` | Runtime frontend config (public gateway URL) |
+| `GET`  | `/health`     | Health check                                 |
+| `GET`  | `/api-docs/`  | Swagger UI                                   |
 
 ## Architecture
 

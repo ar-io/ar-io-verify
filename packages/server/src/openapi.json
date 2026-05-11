@@ -313,8 +313,12 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": false,
-            "schema": { "type": "string" },
-            "description": "Optional. Repeats with the same key (per tenant) return the original job id."
+            "schema": {
+              "type": "string",
+              "pattern": "^[\\x21-\\x7E]{1,128}$",
+              "maxLength": 128
+            },
+            "description": "Optional. Repeats with the same key (per tenant) return the original job id without enqueueing a duplicate. Printable ASCII, max 128 chars."
           }
         ],
         "requestBody": {
@@ -356,8 +360,14 @@
               }
             }
           },
-          "400": { "description": "Invalid body" },
-          "401": { "description": "Missing X-Tenant-Id header (production mode)" }
+          "400": {
+            "description": "Validation failed. The `error` field is one of: `invalid_body` (txIds missing/malformed/over 50,000), `invalid_idempotency_key`, or `Invalid X-Tenant-Id format`.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "401": { "description": "Missing X-Tenant-Id header (production mode)" },
+          "413": { "description": "Request body exceeds 16 MB" }
         }
       }
     },
@@ -379,6 +389,8 @@
               }
             }
           },
+          "400": { "$ref": "#/components/responses/TenantInvalid" },
+          "401": { "$ref": "#/components/responses/TenantMissing" },
           "404": { "description": "Job not found" }
         }
       },
@@ -392,6 +404,8 @@
         ],
         "responses": {
           "200": { "description": "Cancellation requested" },
+          "400": { "$ref": "#/components/responses/TenantInvalid" },
+          "401": { "$ref": "#/components/responses/TenantMissing" },
           "404": { "description": "Job not found" },
           "409": { "description": "Job already in a terminal status (completed/failed/cancelled)" }
         }
@@ -431,6 +445,13 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid query parameter (`invalid_limit`, `invalid_outcome`) or tenant header.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/TenantMissing" },
           "404": { "description": "Job not found" }
         }
       }
@@ -453,6 +474,8 @@
               }
             }
           },
+          "400": { "$ref": "#/components/responses/TenantInvalid" },
+          "401": { "$ref": "#/components/responses/TenantMissing" },
           "404": { "description": "Job not found, or no completed run yet" },
           "406": { "description": "PDF view requested but renderer not yet implemented" }
         }
@@ -485,19 +508,40 @@
                 "schema": { "$ref": "#/components/schemas/JobEventsPage" }
               }
             }
-          }
+          },
+          "400": {
+            "description": "Invalid `since`, `limit`, or tenant header.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/TenantMissing" }
         }
       }
     }
   },
   "components": {
+    "responses": {
+      "TenantInvalid": {
+        "description": "X-Tenant-Id is malformed (must match `^[A-Za-z0-9_.:-]{1,128}$`).",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "TenantMissing": {
+        "description": "X-Tenant-Id header is required (in production). Whatever sits in front of verify is responsible for injecting it.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    },
     "parameters": {
       "TenantHeader": {
         "name": "X-Tenant-Id",
         "in": "header",
         "required": true,
-        "schema": { "type": "string" },
-        "description": "Opaque tenant identifier injected by whatever sits in front of verify (an API gateway, reverse proxy, etc). Verify never validates the value — it is used purely as a partition key. In NODE_ENV != 'production' this header is optional and a synthetic dev tenant is used."
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:-]{1,128}$",
+          "maxLength": 128
+        },
+        "description": "Opaque tenant identifier injected by whatever sits in front of verify (an API gateway, reverse proxy, etc). Verify treats the value as opaque — it is used purely as a partition key. A length+charset envelope is enforced to keep the value sane as a primary-key column. In NODE_ENV != 'production' this header is optional and a synthetic dev tenant is used."
       }
     },
     "schemas": {
