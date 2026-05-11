@@ -60,7 +60,8 @@ The sidecar also ships its own standalone React web UI (served at `/verify/` on 
 git clone https://github.com/ar-io/ar-io-verify.git
 cd ar-io-verify
 pnpm install
-pnpm run dev
+pnpm run dev                       # server only (tsx --watch)
+pnpm --filter verify-web run dev   # web UI in a separate terminal
 ```
 
 ## Deployment
@@ -77,15 +78,19 @@ bash start.sh
 
 The table below covers the Docker Compose deployment (`deploy/.env`). If you're running the server directly without Docker, use `SIGNING_KEY_PATH` instead of `WALLET_FILE` (Compose maps one to the other) and `PORT` instead of `VERIFY_PORT` (the internal sidecar always listens on `PORT`; `VERIFY_PORT` just controls the public nginx port).
 
-| Variable             | Default                          | Description                                                                                                                 |
-| -------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `GATEWAY_URL`        | `http://ar-io-node-envoy-1:3000` | ar.io gateway URL (must be reachable from the container)                                                                    |
-| `GATEWAY_HOST`       | (empty)                          | Gateway hostname included in attestation payloads (e.g. `vilenarios.com`)                                                   |
-| `PUBLIC_GATEWAY_URL` | (empty)                          | Browser-reachable gateway URL for image previews. Falls back to `https://${GATEWAY_HOST}`, then `https://turbo-gateway.com` |
-| `WALLET_FILE`        | (empty)                          | Host path to Arweave JWK wallet for signing attestations                                                                    |
-| `VERIFY_PORT`        | `4001`                           | Public port for the verify UI and API                                                                                       |
-| `GATEWAY_TIMEOUT_MS` | `10000`                          | Gateway request timeout                                                                                                     |
-| `LOG_LEVEL`          | `info`                           | Log level: debug, info, warn, error                                                                                         |
+| Variable                      | Default                          | Description                                                                                                                 |
+| ----------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `GATEWAY_URL`                 | `http://ar-io-node-envoy-1:3000` | ar.io gateway URL (must be reachable from the container)                                                                    |
+| `GATEWAY_HOST`                | (empty)                          | Gateway hostname included in attestation payloads (e.g. `vilenarios.com`)                                                   |
+| `PUBLIC_GATEWAY_URL`          | (empty)                          | Browser-reachable gateway URL for image previews. Falls back to `https://${GATEWAY_HOST}`, then `https://turbo-gateway.com` |
+| `WALLET_FILE`                 | (empty)                          | Host path to Arweave JWK wallet for signing attestations                                                                    |
+| `VERIFY_PORT`                 | `4001`                           | Public port for the verify UI and API                                                                                       |
+| `GATEWAY_TIMEOUT_MS`          | `10000`                          | Gateway request timeout                                                                                                     |
+| `GATEWAY_MAX_INFLIGHT`        | `32`                             | Global cap on concurrent outbound gateway fetches. Shared across batch jobs and ad-hoc `/verify` requests                   |
+| `JOB_WORKER_CONCURRENCY`      | `8`                              | Per-job fan-out for the batch worker pool. The actual ceiling is `min(JOB_WORKER_CONCURRENCY, GATEWAY_MAX_INFLIGHT)`        |
+| `JOB_STALL_MS`                | `300000`                         | A running job with no recorded progress for this long is failed by the stall detector (default 5 min)                       |
+| `JOB_STALL_CHECK_INTERVAL_MS` | `60000`                          | How often the stall detector wakes up                                                                                       |
+| `LOG_LEVEL`                   | `info`                           | Log level: debug, info, warn, error                                                                                         |
 
 ### Nginx Configuration
 
@@ -144,7 +149,8 @@ For verifying many transactions in one shot — periodic audits, archival sweeps
 
 ```
 packages/
-  server/    Express API — verification pipeline, PDF certificates, SQLite cache
+  server/    Express API — verification pipeline, single-tx attestations + PDF certificates,
+             batch verification jobs with operator-signed bundles, multi-tenant SQLite store
   web/       React frontend — Vite, Tailwind CSS, served at /verify/
 deploy/      Docker Compose + nginx reverse proxy
 ```
