@@ -90,6 +90,7 @@ The table below covers the Docker Compose deployment (`deploy/.env`). If you're 
 | `JOB_WORKER_CONCURRENCY`      | `8`                              | Per-job fan-out for the batch worker pool. The actual ceiling is `min(JOB_WORKER_CONCURRENCY, GATEWAY_MAX_INFLIGHT)`        |
 | `JOB_STALL_MS`                | `300000`                         | A running job with no recorded progress for this long is failed by the stall detector (default 5 min)                       |
 | `JOB_STALL_CHECK_INTERVAL_MS` | `60000`                          | How often the stall detector wakes up                                                                                       |
+| `SHUTDOWN_DRAIN_MS`           | `30000`                          | Hard cap on graceful shutdown drain. In-flight jobs running past this resume on next boot via `sweepStaleRunning`           |
 | `LOG_LEVEL`                   | `info`                           | Log level: debug, info, warn, error                                                                                         |
 
 ### Nginx Configuration
@@ -137,12 +138,21 @@ For verifying many transactions in one shot — periodic audits, archival sweeps
 
 **The verification bundle is the primary artifact.** It's a canonical-JSON document signed RSA-PSS-SHA256 with the operator's wallet. A verifier with only the operator's public key can confirm authenticity offline — re-canonicalize (deep-sort keys, no whitespace), recompute SHA-256 of the bundle minus `signature` and `payloadHash`, match `payloadHash`, then verify the signature. See `deploy/smoke-jobs.sh` for a reference implementation.
 
+### Operations
+
+| Method | Path       | Description                                                                                                                      |
+| ------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/health`  | Liveness probe (process is up; reports gateway connectivity boolean)                                                             |
+| `GET`  | `/ready`   | Readiness probe (returns 503 with per-check breakdown if DB or gateway are unreachable)                                          |
+| `GET`  | `/metrics` | Prometheus scrape endpoint (default node metrics + `verify_*` counters, gauges, histograms). Restrict access at the proxy layer. |
+
+Every request also echoes its `X-Request-Id` back on the response (or synthesizes one if the upstream didn't provide it), so logs can be correlated end-to-end with the upstream API gateway. Shutdown is graceful — `SIGTERM` drains in-flight jobs up to `SHUTDOWN_DRAIN_MS` (default 30s) before exiting, so rolling deploys don't lose batch-job progress.
+
 ### Misc
 
 | Method | Path          | Description                                  |
 | ------ | ------------- | -------------------------------------------- |
 | `GET`  | `/api/config` | Runtime frontend config (public gateway URL) |
-| `GET`  | `/health`     | Health check                                 |
 | `GET`  | `/api-docs/`  | Swagger UI                                   |
 
 ## Architecture

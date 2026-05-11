@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'node:url';
@@ -9,11 +10,20 @@ import { logger } from './utils/logger.js';
 import { initDb, closeDb } from './storage/db.js';
 import { initCache, closeCache } from './storage/cache.js';
 import { initJobsStore, sweepStaleRunning, pruneOldJobs } from './storage/jobs.js';
-import { resumePending, startStallDetector, stopStallDetector } from './pipeline/job-worker.js';
+import {
+  drainInflight,
+  resumePending,
+  startStallDetector,
+  stopStallDetector,
+} from './pipeline/job-worker.js';
 import { initSigning } from './utils/signing.js';
+import { requestId } from './middleware/request-id.js';
+import { accessLog } from './middleware/access-log.js';
 import healthRouter from './routes/health.js';
 import verifyRouter from './routes/verify.js';
 import jobsRouter from './routes/jobs.js';
+import metricsRouter from './routes/metrics.js';
+import readyRouter from './routes/ready.js';
 
 const app = express();
 
@@ -25,12 +35,20 @@ app.use(cors({ origin: '*' }));
 // a useful error.
 app.use(express.json({ limit: '16mb' }));
 
+// Threads the upstream x-request-id (api-guard injects one) through every
+// request, generating one if absent. Runs first so access-log can include it.
+app.use(requestId());
+// Structured access log + HTTP metrics on every request.
+app.use(accessLog());
+
 // API routes — mounted under a sub-router so we can serve at both '/' and '/verify/'
 // This supports two access paths:
 //   1. Domain access via reverse proxy that strips /verify/ prefix (e.g., nginx proxy_pass)
 //   2. Direct IP access where the frontend uses /verify/ as its base path
 const apiRouter = express.Router();
 apiRouter.use('/health', healthRouter);
+apiRouter.use('/ready', readyRouter);
+apiRouter.use('/metrics', metricsRouter);
 apiRouter.use('/api/v1/verify', verifyRouter);
 apiRouter.use('/api/v1/jobs', jobsRouter);
 
@@ -51,6 +69,8 @@ apiRouter.get('/api', (_req, res) => {
       jobsResults: 'GET /api/v1/jobs/:id/results',
       jobsCancel: 'DELETE /api/v1/jobs/:id',
       jobsEvents: 'GET /api/v1/jobs/events',
+      ready: 'GET /ready',
+      metrics: 'GET /metrics',
       config: 'GET /api/config',
       docs: 'GET /api-docs/',
     },
@@ -113,9 +133,13 @@ if (existsSync(webDistPath)) {
       req.path.startsWith('/api/') ||
       req.path.startsWith('/api-docs') ||
       req.path.startsWith('/health') ||
+      req.path.startsWith('/ready') ||
+      req.path.startsWith('/metrics') ||
       req.path.startsWith('/verify/api/') ||
       req.path.startsWith('/verify/api-docs') ||
-      req.path.startsWith('/verify/health')
+      req.path.startsWith('/verify/health') ||
+      req.path.startsWith('/verify/ready') ||
+      req.path.startsWith('/verify/metrics')
     ) {
       next();
       return;
@@ -155,18 +179,50 @@ function stopJobsPruner(): void {
   }
 }
 
-// Graceful shutdown
-async function shutdown() {
-  logger.info('Shutting down...');
+// Graceful shutdown.
+//
+// Order matters:
+//   1. Stop accepting new HTTP connections (in-flight requests drain on their own).
+//   2. Stop background timers so no new work is scheduled.
+//   3. Drain the worker pool — wait for in-flight verifies to finish, capped
+//      by SHUTDOWN_DRAIN_MS. Anything still running after the cap is left in
+//      'running' status; sweepStaleRunning on next boot bumps last_progress_at
+//      and the worker resumes via partial-run resume.
+//   4. Close DB, exit.
+let httpServer: Server | null = null;
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info({ signal }, 'Shutdown initiated — draining');
+
+  if (httpServer) {
+    httpServer.close((err) => {
+      if (err) logger.warn({ err }, 'HTTP server close emitted error');
+    });
+  }
+
   stopStallDetector();
   stopJobsPruner();
+
+  const remaining = await drainInflight(config.SHUTDOWN_DRAIN_MS);
+  if (remaining > 0) {
+    logger.warn(
+      { remaining, drainMs: config.SHUTDOWN_DRAIN_MS },
+      'Drain timed out — jobs will resume on next boot'
+    );
+  } else {
+    logger.info('Worker pool drained cleanly');
+  }
+
   closeCache();
   closeDb();
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
 // Start server
 try {
@@ -188,7 +244,7 @@ try {
   startStallDetector();
   startJobsPruner();
 
-  app.listen(config.PORT, () => {
+  httpServer = app.listen(config.PORT, () => {
     logger.info(`Verify Sidecar running at http://localhost:${config.PORT}`);
   });
 } catch (error) {

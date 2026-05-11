@@ -22,12 +22,12 @@
   "paths": {
     "/health": {
       "get": {
-        "summary": "Health check",
-        "description": "Returns the service status and gateway connectivity.",
+        "summary": "Liveness probe",
+        "description": "Returns 200 as long as the process is running. Use as a Kubernetes-style livenessProbe. `gateway` is informational; a failing gateway does not make `/health` fail (use `/ready` for that).",
         "tags": ["System"],
         "responses": {
           "200": {
-            "description": "Service is running",
+            "description": "Process is alive",
             "content": {
               "application/json": {
                 "schema": {
@@ -41,6 +41,42 @@
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Readiness probe",
+        "description": "Returns 200 only if all critical dependencies (DB, gateway) are reachable. Returns 503 otherwise with a per-check breakdown. Use as a Kubernetes-style readinessProbe so traffic drains when a dependency is down.",
+        "tags": ["System"],
+        "responses": {
+          "200": {
+            "description": "Ready to serve traffic",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReadyResponse" } }
+            }
+          },
+          "503": {
+            "description": "Not ready — a dependency is unreachable",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReadyResponse" } }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Prometheus scrape endpoint",
+        "description": "Returns metrics in Prometheus text-exposition format. Includes default node metrics under the `verify_` prefix plus domain counters, gauges, and histograms (`verify_jobs_created_total`, `verify_runs_total{status}`, `verify_tx_outcomes_total{outcome,cache_hit}`, `verify_gateway_requests_total`, `verify_gateway_queue_depth`, `verify_signing_enabled`, `verify_inflight_jobs`, `verify_run_duration_seconds`, `verify_http_requests_total{route,status_class}`, etc). No per-tenant labels — cardinality discipline. Restrict access at the proxy layer.",
+        "tags": ["System"],
+        "responses": {
+          "200": {
+            "description": "Prometheus text-format metrics",
+            "content": {
+              "text/plain": { "schema": { "type": "string" } }
             }
           }
         }
@@ -549,6 +585,23 @@
         "type": "object",
         "properties": {
           "error": { "type": "string" }
+        }
+      },
+      "ReadyResponse": {
+        "type": "object",
+        "properties": {
+          "ready": { "type": "boolean" },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "db": { "type": "boolean" },
+              "gateway": { "type": "boolean" },
+              "signing": {
+                "type": "boolean",
+                "description": "Whether the operator signing wallet is loaded. Informational; not a readiness gate (the server runs without one for unsigned bundles)."
+              }
+            }
+          }
         }
       },
       "VerificationResult": {

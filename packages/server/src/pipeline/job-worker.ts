@@ -6,6 +6,13 @@ import { mapOutcome } from './outcome.js';
 import { buildBundle, bundleToCanonicalJson } from './bundle.js';
 import { saveResult, getMostRecentPermanentResult } from '../storage/cache.js';
 import * as jobs from '../storage/jobs.js';
+import {
+  inflightJobs as inflightJobsGauge,
+  jobsCreated,
+  runDuration,
+  runsCompleted,
+  txOutcomes,
+} from '../utils/metrics.js';
 
 /**
  * In-process worker pool for verification jobs.
@@ -29,12 +36,20 @@ import * as jobs from '../storage/jobs.js';
 const PER_JOB_CONCURRENCY = config.JOB_WORKER_CONCURRENCY ?? 8;
 
 const inflightJobs = new Set<string>();
+let draining = false;
 
 /**
  * Schedule a job to run. Fire-and-forget — the caller does NOT await.
  * Idempotent: a duplicate enqueue while the same job is in flight is a no-op.
+ *
+ * Refuses new work once `startDraining()` has been called — pending rows
+ * stay in the DB and are picked up by `resumePending()` on the next boot.
  */
 export function enqueue(jobId: string): void {
+  if (draining) {
+    logger.info({ jobId }, 'enqueue ignored: worker draining for shutdown');
+    return;
+  }
   if (inflightJobs.has(jobId)) {
     logger.debug({ jobId }, 'enqueue ignored: job already in-flight');
     return;
@@ -43,6 +58,32 @@ export function enqueue(jobId: string): void {
   void runJob(jobId).catch((err) => {
     logger.error({ err, jobId }, 'Job worker exited unexpectedly');
   });
+}
+
+/**
+ * Signal the worker pool to stop accepting new jobs. Used as the first step
+ * of graceful shutdown — pending jobs left in the DB resume on next boot.
+ */
+export function startDraining(): void {
+  draining = true;
+}
+
+/**
+ * Wait for all in-flight jobs to finish, or until `timeoutMs` elapses. Returns
+ * the number of jobs still running at return time (0 = clean drain).
+ */
+export async function drainInflight(timeoutMs: number): Promise<number> {
+  startDraining();
+  const deadline = Date.now() + timeoutMs;
+  while (inflightJobs.size > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return inflightJobs.size;
+}
+
+/** For tests + the readiness probe. */
+export function inflightJobCount(): number {
+  return inflightJobs.size;
 }
 
 /**
@@ -69,6 +110,8 @@ export function resumePending(): number {
  */
 export async function runJob(jobId: string): Promise<void> {
   inflightJobs.add(jobId);
+  inflightJobsGauge.set(inflightJobs.size);
+  const runStart = process.hrtime.bigint();
   try {
     const job = jobs.findJobById(jobId);
     if (!job) {
@@ -120,6 +163,7 @@ export async function runJob(jobId: string): Promise<void> {
       const final = jobs.findJobById(jobId);
       if (final?.status === 'cancelled' || cancelled) {
         jobs.cancelRun(run.id);
+        runsCompleted.inc({ status: 'cancelled' });
         jobs.recordEvent({
           tenantId: job.tenantId,
           jobId,
@@ -140,6 +184,7 @@ export async function runJob(jobId: string): Promise<void> {
       }
       jobs.completeRun(run.id, bundleId);
       jobs.updateJobStatus(jobId, 'completed');
+      runsCompleted.inc({ status: 'completed' });
       jobs.recordEvent({
         tenantId: job.tenantId,
         jobId,
@@ -152,6 +197,7 @@ export async function runJob(jobId: string): Promise<void> {
       logger.error({ err, jobId, runId: run.id }, 'Run failed unexpectedly');
       jobs.failRun(run.id, reason);
       jobs.updateJobStatus(jobId, 'failed');
+      runsCompleted.inc({ status: 'failed' });
       jobs.recordEvent({
         tenantId: job.tenantId,
         jobId,
@@ -162,6 +208,8 @@ export async function runJob(jobId: string): Promise<void> {
     }
   } finally {
     inflightJobs.delete(jobId);
+    inflightJobsGauge.set(inflightJobs.size);
+    runDuration.observe(Number(process.hrtime.bigint() - runStart) / 1e9);
   }
 }
 
@@ -184,6 +232,7 @@ async function processOne(runId: string, txId: string): Promise<void> {
       unavailable: m.outcome === 'unavailable' ? 1 : 0,
       cacheHit: 1,
     });
+    txOutcomes.inc({ outcome: m.outcome, cache_hit: 'true' });
     return;
   }
 
@@ -205,6 +254,7 @@ async function processOne(runId: string, txId: string): Promise<void> {
       unavailable: m.outcome === 'unavailable' ? 1 : 0,
       bytesFetched: result.metadata.dataSize ?? 0,
     });
+    txOutcomes.inc({ outcome: m.outcome, cache_hit: 'false' });
   } catch (err) {
     // Pipeline shouldn't normally throw — runVerification handles its own
     // errors and emits a not-found / level-1 result. But guard against bugs.
@@ -266,6 +316,7 @@ export function checkStalledOnce(): number {
     );
     jobs.failRun(run.id, 'stalled');
     jobs.updateJobStatus(job.id, 'failed');
+    runsCompleted.inc({ status: 'failed' });
     jobs.recordEvent({
       tenantId: job.tenantId,
       jobId: job.id,

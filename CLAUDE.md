@@ -100,6 +100,8 @@ deploy/      Standalone Docker Compose deployment
 15. Verify never knows about auth, tier, billing, or rate limits — those are upstream concerns. The only thing verify reads from request headers (besides `Idempotency-Key`) is `X-Tenant-Id`, which it treats as opaque.
 16. Job request body limit is **16 MB** (`express.json({ limit: '16mb' })`) and the per-job txId cap is **50,000**. Both must move together — bumping zod's `max(50_000)` without lifting the body limit produces silent 413 errors before zod validation runs. Keep them aligned.
 17. Status-conditional UPDATEs are load-bearing for cancellation correctness. Don't simplify `WHERE id = ? AND status = 'running'` to `WHERE id = ?` in `bumpRunCounters` / `recordResult` / `completeRun` / `failRun` / `cancelRun` — late-arriving worker writes will resurrect cancelled runs.
+18. Graceful shutdown drains the worker pool. `SIGTERM`/`SIGINT` triggers: (1) HTTP server stops accepting new connections, (2) timers stop, (3) `drainInflight(SHUTDOWN_DRAIN_MS)` waits for in-flight verifies — bounded by `SHUTDOWN_DRAIN_MS` (default 30s), (4) DB closes, exit. Anything still running after the drain cap is recovered by `sweepStaleRunning` on next boot. **Don't replace with `process.exit(0)` directly** — rolling deploys depend on this.
+19. The Prometheus registry (`utils/metrics.ts`) intentionally has **no per-tenant labels**. Tenant id has unbounded cardinality (one customer's misuse can blow up Prom's time-series count). Per-tenant accounting belongs at api-guard, which knows the tenant→customer mapping; verify exposes aggregate health only.
 
 ## API Endpoints
 
@@ -122,10 +124,15 @@ Batch jobs (require `X-Tenant-Id` header):
 - `GET /api/v1/jobs/events?since=…` — pull-based event stream
 - `DELETE /api/v1/jobs/:id` — soft-cancel
 
+Ops (no tenant header — internal probes / scrape):
+
+- `GET /health` — liveness probe (process is up + gateway-reachable boolean)
+- `GET /ready` — readiness probe (returns 503 with per-check breakdown if DB or gateway are down)
+- `GET /metrics` — Prometheus scrape endpoint. Default node metrics under `verify_` prefix plus domain counters/gauges/histograms (`verify_jobs_created_total`, `verify_runs_total{status}`, `verify_tx_outcomes_total{outcome,cache_hit}`, `verify_gateway_requests_total`, `verify_gateway_queue_depth`, `verify_signing_enabled`, `verify_inflight_jobs`, `verify_run_duration_seconds`, `verify_http_requests_total{route,status_class}`, etc). **Cardinality discipline: no `tenant_id` labels** — operators get aggregates; per-tenant accounting belongs upstream.
+
 Misc:
 
 - `GET /api/config` — runtime frontend config (public gateway URL for image previews)
-- `GET /health` — health check
 
 ## Console Integration
 

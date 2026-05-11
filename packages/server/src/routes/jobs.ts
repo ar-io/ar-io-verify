@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import { requireTenant, getTenant } from '../middleware/tenant.js';
 import { enqueue } from '../pipeline/job-worker.js';
+import { jobsCreated } from '../utils/metrics.js';
 import * as jobs from '../storage/jobs.js';
 
 const router: RouterType = Router();
@@ -56,6 +57,7 @@ router.post('/', (req, res) => {
   if (!result.deduplicated) {
     enqueue(result.job.id);
   }
+  jobsCreated.inc({ deduplicated: result.deduplicated ? 'true' : 'false' });
 
   logger.info(
     {

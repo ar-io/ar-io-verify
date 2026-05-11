@@ -44,6 +44,15 @@ const envSchema = z.object({
     .int()
     .positive()
     .default(60 * 1000),
+
+  // Hard cap on how long graceful shutdown will wait for in-flight jobs
+  // before terminating anyway. Anything still running after this hits
+  // sweepStaleRunning on the next boot and resumes.
+  SHUTDOWN_DRAIN_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30 * 1000),
 });
 
 export type Config = z.infer<typeof envSchema>;
