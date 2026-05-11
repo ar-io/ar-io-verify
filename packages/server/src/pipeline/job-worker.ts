@@ -159,18 +159,23 @@ export async function runJob(jobId: string): Promise<void> {
         )
       );
 
-      // Final status check — caller may have cancelled mid-flight.
+      // Final status check — caller may have cancelled mid-flight, or the
+      // stall detector may have failed us. All terminal transitions are gated
+      // on the repo's status-conditional UPDATE returning true so we never
+      // emit double events or flip the job status backward when racing with
+      // another finalizer.
       const final = jobs.findJobById(jobId);
       if (final?.status === 'cancelled' || cancelled) {
-        jobs.cancelRun(run.id);
-        runsCompleted.inc({ status: 'cancelled' });
-        jobs.recordEvent({
-          tenantId: job.tenantId,
-          jobId,
-          runId: run.id,
-          type: 'run.cancelled',
-          payload: summaryPayload(run.id),
-        });
+        if (jobs.cancelRun(run.id)) {
+          runsCompleted.inc({ status: 'cancelled' });
+          jobs.recordEvent({
+            tenantId: job.tenantId,
+            jobId,
+            runId: run.id,
+            type: 'run.cancelled',
+            payload: summaryPayload(run.id),
+          });
+        }
         return;
       }
 
@@ -182,29 +187,38 @@ export async function runJob(jobId: string): Promise<void> {
         const saved = jobs.saveBundle(run.id, bundleToCanonicalJson(bundle));
         bundleId = saved.id;
       }
-      jobs.completeRun(run.id, bundleId);
-      jobs.updateJobStatus(jobId, 'completed');
-      runsCompleted.inc({ status: 'completed' });
-      jobs.recordEvent({
-        tenantId: job.tenantId,
-        jobId,
-        runId: run.id,
-        type: 'run.completed',
-        payload: { ...summaryPayload(run.id), bundleId },
-      });
+      if (jobs.completeRun(run.id, bundleId)) {
+        jobs.updateJobStatus(jobId, 'completed');
+        runsCompleted.inc({ status: 'completed' });
+        jobs.recordEvent({
+          tenantId: job.tenantId,
+          jobId,
+          runId: run.id,
+          type: 'run.completed',
+          payload: { ...summaryPayload(run.id), bundleId },
+        });
+      } else {
+        // Someone else (stall detector, cancel) finalized the run during the
+        // bundle build window. Don't double-emit; their event already exists.
+        logger.info(
+          { jobId, runId: run.id },
+          'Run was finalized by another path during completion — skipping emission'
+        );
+      }
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'unknown';
       logger.error({ err, jobId, runId: run.id }, 'Run failed unexpectedly');
-      jobs.failRun(run.id, reason);
-      jobs.updateJobStatus(jobId, 'failed');
-      runsCompleted.inc({ status: 'failed' });
-      jobs.recordEvent({
-        tenantId: job.tenantId,
-        jobId,
-        runId: run.id,
-        type: 'run.failed',
-        payload: { ...summaryPayload(run.id), reason },
-      });
+      if (jobs.failRun(run.id, reason)) {
+        jobs.updateJobStatus(jobId, 'failed');
+        runsCompleted.inc({ status: 'failed' });
+        jobs.recordEvent({
+          tenantId: job.tenantId,
+          jobId,
+          runId: run.id,
+          type: 'run.failed',
+          payload: { ...summaryPayload(run.id), reason },
+        });
+      }
     }
   } finally {
     inflightJobs.delete(jobId);
@@ -314,7 +328,11 @@ export function checkStalledOnce(): number {
       { jobId: job.id, runId: run.id, lastProgressAt: run.lastProgressAt },
       'Detected stalled run — failing'
     );
-    jobs.failRun(run.id, 'stalled');
+    // Race-safe: only emit side effects if THIS call won the transition.
+    // The worker may have just completed the run a moment ago.
+    if (!jobs.failRun(run.id, 'stalled')) {
+      continue;
+    }
     jobs.updateJobStatus(job.id, 'failed');
     runsCompleted.inc({ status: 'failed' });
     jobs.recordEvent({

@@ -14,7 +14,10 @@ export function accessLog(): RequestHandler {
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const durationSec = Number(process.hrtime.bigint() - start) / 1e9;
-      const route = req.route?.path ? `${req.baseUrl}${req.route.path}` : req.path;
+      // Use the matched route template (e.g. `/api/v1/jobs/:id`) rather than
+      // the request path so high-cardinality ids don't blow up the metric
+      // label set. Unmatched paths collapse to a single 'unmatched' label.
+      const route = req.route?.path ? `${req.baseUrl}${req.route.path}` : 'unmatched';
       const statusClass = `${Math.floor(res.statusCode / 100)}xx`;
       const tenantId = (req as { tenant?: { tenantId: string } }).tenant?.tenantId ?? null;
       const fields = {

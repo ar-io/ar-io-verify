@@ -55,7 +55,7 @@ apiRouter.use('/api/v1/jobs', jobsRouter);
 apiRouter.get('/api', (_req, res) => {
   res.json({
     name: 'Verify Sidecar',
-    version: '0.1.0',
+    version: '0.2.0',
     description: 'Verification and attestation service for Arweave transaction data',
     endpoints: {
       health: 'GET /health',
