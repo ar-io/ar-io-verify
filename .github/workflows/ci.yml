@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref — we don't care about CI for
+# commits that have already been replaced by newer pushes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, typecheck, build, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prettier
+        run: pnpm run format:check
+
+      - name: Typecheck (server)
+        run: pnpm --filter @ar-io/verify-server run typecheck
+
+      - name: Build (server + web)
+        run: pnpm run build
+
+      - name: Test (server)
+        run: pnpm run test
+
+  docker:
+    name: Verify Dockerfile builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Build the image but don't push — proves the production artifact is
+    # buildable end-to-end. Image push to a registry is a separate
+    # workflow if/when we wire one up.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: ar-io-verify:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
