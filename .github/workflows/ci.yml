@@ -55,6 +55,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GHA cache export requires the docker-container buildx driver; the
+      # default docker driver rejects cache-to with "Cache export is not
+      # supported for the docker driver".
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build image
         uses: docker/build-push-action@v6
         with:
