@@ -83,7 +83,7 @@ deploy/      Standalone Docker Compose deployment
 
 ## Critical Notes
 
-1. Run `pnpm run format` before every commit
+1. Run `pnpm run format` before every commit. CI (`.github/workflows/ci.yml`) runs `format:check`, `typecheck`, `build`, `vitest`, and a Docker image build on every push to `main` and every PR — formatting failures will block merges.
 2. The server's unique value: **multi-tenant job state, operator-signed verification bundles, the cache, and pull-based events**. The single-tx verification math could in principle run client-side, but the batch jobs surface fundamentally cannot — job lifecycle, tenant isolation, the cache, and operator-wallet signing are all server-only.
 3. `/tx/` via Envoy always 404s for data items — use GraphQL + /raw/ headers instead
 4. Tags from HTTP headers are alphabetical (wrong order) — use GraphQL or binary header for sig verification
