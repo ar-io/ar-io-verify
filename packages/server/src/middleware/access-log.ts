@@ -1,6 +1,7 @@
 import type { RequestHandler } from 'express';
 import { logger } from '../utils/logger.js';
 import { getRequestId } from './request-id.js';
+import { tryGetTenant } from './tenant.js';
 import { httpRequestDuration, httpRequests } from '../utils/metrics.js';
 
 /**
@@ -19,7 +20,10 @@ export function accessLog(): RequestHandler {
       // label set. Unmatched paths collapse to a single 'unmatched' label.
       const route = req.route?.path ? `${req.baseUrl}${req.route.path}` : 'unmatched';
       const statusClass = `${Math.floor(res.statusCode / 100)}xx`;
-      const tenantId = (req as { tenant?: { tenantId: string } }).tenant?.tenantId ?? null;
+      // tenantId is Symbol-keyed on the request — use the helper rather than
+      // a stringly-typed property access. Returns null on routes that don't
+      // run tenant middleware (e.g. /health, /metrics).
+      const tenantId = tryGetTenant(req)?.tenantId ?? null;
       const fields = {
         requestId: getRequestId(req),
         tenantId,

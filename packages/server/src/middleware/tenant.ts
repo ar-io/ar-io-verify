@@ -64,3 +64,13 @@ export function getTenant(req: Request): TenantContext {
   }
   return slot;
 }
+
+/**
+ * Non-throwing tenant lookup. Returns null when the request didn't go through
+ * a tenant-scoped route (e.g. /health, /metrics). Used by the access-log
+ * middleware so it can attach tenantId when present without crashing on the
+ * routes that don't have one.
+ */
+export function tryGetTenant(req: Request): TenantContext | null {
+  return (req as Request & TenantSlot)[TENANT_SLOT] ?? null;
+}
