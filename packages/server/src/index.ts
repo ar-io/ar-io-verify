@@ -24,6 +24,7 @@ import verifyRouter from './routes/verify.js';
 import jobsRouter from './routes/jobs.js';
 import metricsRouter from './routes/metrics.js';
 import readyRouter from './routes/ready.js';
+import schemasRouter from './routes/schemas.js';
 
 const app = express();
 
@@ -51,6 +52,7 @@ apiRouter.use('/ready', readyRouter);
 apiRouter.use('/metrics', metricsRouter);
 apiRouter.use('/api/v1/verify', verifyRouter);
 apiRouter.use('/api/v1/jobs', jobsRouter);
+apiRouter.use('/schemas', schemasRouter);
 
 apiRouter.get('/api', (_req, res) => {
   res.json({
