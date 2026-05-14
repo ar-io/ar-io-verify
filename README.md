@@ -91,6 +91,7 @@ The table below covers the Docker Compose deployment (`deploy/.env`). If you're 
 | `JOB_STALL_MS`                | `300000`                         | A running job with no recorded progress for this long is failed by the stall detector (default 5 min)                       |
 | `JOB_STALL_CHECK_INTERVAL_MS` | `60000`                          | How often the stall detector wakes up                                                                                       |
 | `SHUTDOWN_DRAIN_MS`           | `30000`                          | Hard cap on graceful shutdown drain. In-flight jobs running past this resume on next boot via `sweepStaleRunning`           |
+| `BUNDLE_RETENTION_MONTHS`     | `6`                              | Asserted retention horizon on every signed bundle. Default 6 months matches the EU AI Act Art. 19 log-retention floor       |
 | `LOG_LEVEL`                   | `info`                           | Log level: debug, info, warn, error                                                                                         |
 
 ### Nginx Configuration
@@ -136,7 +137,17 @@ For verifying many transactions in one shot — periodic audits, archival sweeps
 
 **Multi-tenant.** The batch jobs API is scoped by an opaque `X-Tenant-Id` header. Verify trusts whatever sits in front of it (an API gateway, reverse proxy, etc.) to authenticate, rate-limit, and inject that header — it doesn't itself enforce auth, tiers, quotas, or rate limits. Two tenants can submit jobs against the same sidecar without seeing each other's data.
 
-**The verification bundle is the primary artifact.** It's a canonical-JSON document signed RSA-PSS-SHA256 with the operator's wallet. A verifier with only the operator's public key can confirm authenticity offline — re-canonicalize (deep-sort keys, no whitespace), recompute SHA-256 of the bundle minus `signature` and `payloadHash`, match `payloadHash`, then verify the signature. See `deploy/smoke-jobs.sh` for a reference implementation.
+**The verification bundle is the primary artifact (V2).** A canonical-JSON document, RFC 8785-canonicalized and signed RSA-PSS-SHA256 with the operator's wallet. It carries an `issuer` block (operator, gateway, trust anchor), a `subject` block, a `methodology` block (named algorithms, canonicalization spec, assurance level, known limitations, reference verifier URL), enumerated per-tx evidence with a Merkle root (`results.txMerkleRoot`) for inclusion proofs, an explicit `validity` window (`P6M` default — EU AI Act Art. 19 floor), a plain-language `humanReadable` block, and a `conformance` array listing the standards it claims alignment with.
+
+**Offline re-verification.** Run the reference verifier on any bundle:
+
+```bash
+node packages/verifier-cli/bin/reverify.mjs path/to/bundle.json
+```
+
+It re-derives `payloadHash`, reconstructs `results.txMerkleRoot`, and verifies the RSA-PSS signature against `issuer.operatorPublicKey` — needing nothing from the verify server itself. The JSON Schema is published at `GET /schemas/v2/bundle.json` for structural conformance checking.
+
+**Compliance posture.** Each bundle claims structural alignment with the EU AI Act (Art. 10/12/13/19), ISO/IEC 42001:2023, NIST AI RMF + GenAI Profile, W3C VC 2.0 conventions, C2PA 2.x, and RFC 8785. See [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) for the clause-by-clause map and documented gaps.
 
 ### Operations
 
@@ -150,10 +161,11 @@ Every request also echoes its `X-Request-Id` back on the response (or synthesize
 
 ### Misc
 
-| Method | Path          | Description                                  |
-| ------ | ------------- | -------------------------------------------- |
-| `GET`  | `/api/config` | Runtime frontend config (public gateway URL) |
-| `GET`  | `/api-docs/`  | Swagger UI                                   |
+| Method | Path                      | Description                                                |
+| ------ | ------------------------- | ---------------------------------------------------------- |
+| `GET`  | `/api/config`             | Runtime frontend config (public gateway URL)               |
+| `GET`  | `/api-docs/`              | Swagger UI                                                 |
+| `GET`  | `/schemas/v2/bundle.json` | JSON Schema 2020-12 for the VerificationBundle V2 artifact |
 
 ## Architecture
 

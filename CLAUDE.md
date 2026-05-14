@@ -70,16 +70,22 @@ deploy/      Standalone Docker Compose deployment
 
 - `server/src/utils/crypto.ts` — deep hash, RSA-PSS, ED25519, ECDSA, Avro tag serialization
 - `server/src/utils/ans104-parser.ts` — ANS-104 binary header parser
-- `server/src/utils/signing.ts` — JWK loader, attestation + bundle signer, deep canonicalization
-- `server/src/gateway/client.ts` — gateway API client (HEAD, GET, GraphQL, range requests; all wrapped in the global budget)
+- `server/src/utils/canonical.ts` — RFC 8785 (JCS) canonicalization (the bytes we sign)
+- `server/src/utils/merkle.ts` — SHA-256 Merkle root over canonical per-tx entries
+- `server/src/utils/signing.ts` — JWK loader, attestation + bundle signer (delegates canonical to `canonical.ts`)
+- `server/src/gateway/client.ts` — gateway API client (HEAD, GET, GraphQL, range requests, `/tx/:id/offset`; all wrapped in the global budget)
 - `server/src/gateway/budget.ts` — process-wide semaphore over outbound gateway fetches
-- `server/src/storage/db.ts` — shared SQLite connection (WAL mode)
-- `server/src/storage/jobs.ts` — jobs / runs / results / events / bundles repository
+- `server/src/storage/db.ts` — shared SQLite connection (WAL mode); owns the `verification_results` table that bundle.ts joins against
+- `server/src/storage/jobs.ts` — jobs / runs / results / events / bundles repository; `listVerifiedForRun` joins with verification_results for per-tx evidence
 - `server/src/pipeline/job-worker.ts` — worker pool, stall detector, partial-run resume, cancellation
-- `server/src/pipeline/bundle.ts` — VerificationBundleV1 builder + signer
+- `server/src/pipeline/bundle.ts` — **VerificationBundleV2** builder + signer (V1 was removed)
 - `server/src/pipeline/outcome.ts` — VerificationResult → (outcome, failureReason) mapping
+- `server/src/attestation/compliance.ts` — shared compliance metadata (`conformance[]`, methodology, limitations text) reused by bundle.ts + pdf-generator.ts
 - `server/src/middleware/tenant.ts` — `X-Tenant-Id` extraction
+- `server/src/version.ts` — reads `SERVER_VERSION` from package.json (used in bundle issuer + startup log)
+- `server/schemas/v2/bundle.json` — JSON Schema 2020-12 for the bundle, served at `/schemas/v2/bundle.json`
 - `server/src/openapi.json` — OpenAPI 3.0 spec (served at /api-docs/)
+- `verifier-cli/` — zero-dep reference offline verifier (mirrors canonical.ts + merkle.ts deliberately, so an auditor can diff)
 
 ## Critical Notes
 
@@ -94,14 +100,16 @@ deploy/      Standalone Docker Compose deployment
 9. Env config is parsed with zod in `server/src/config.ts` — add new env vars there, not ad-hoc `process.env` reads.
 10. Frontend image previews read `publicGatewayUrl` from `GET /api/config`. Resolution order: `PUBLIC_GATEWAY_URL` → `https://${GATEWAY_HOST}` → `https://turbo-gateway.com`. The sidecar no longer proxies `/raw/` — image loads go directly to the gateway.
 11. The pipeline verifies `SHA-256(signature) == requested txId` (see `pipeline/orchestrator.ts`). This is a deliberate substitution check — a malicious gateway can return valid-looking data for the wrong txId, and this catches it. Do not remove as "redundant."
-12. The verification cache (`storage/cache.ts`) only stores **permanent outcomes** (verified / tampered). Transient `unavailable` results are intentionally NOT cached so future re-verifications retry. Don't "fix" `saveResult` to cache everything — the change-detection signal depends on this filter.
-13. `signing.ts:canonicalize` is **deep recursive**. Sorts keys at every level. Arrays preserve order (array order is semantic). Both per-tx attestations and run bundles depend on this — verifier compatibility hinges on byte-identical canonicalization.
-14. The bundle artifact (`pipeline/bundle.ts`) is the primary output of a job, NOT a PDF. PDF view is post-MVP and returns 406 today. Verifiers re-canonicalize the bundle minus `signature` + `payloadHash`, recompute SHA-256 to match `payloadHash`, then verify RSA-PSS-SHA256 against `operatorPublicKey`.
+12. The verification cache (`storage/cache.ts`) stores **all** outcomes — the change-detection filter is at READ time in `getMostRecentPermanentResult()`. The previous behaviour of dropping `unavailable` results at write time silently 404'd the single-tx PDF endpoint. Keep the read-time filter; do not re-add a write-time one.
+13. Canonicalization is **RFC 8785 (JCS)** in `utils/canonical.ts` — sorted UTF-16 code-unit keys, ECMAScript number serialization, undefined-member drop. Both per-tx attestations and V2 bundles depend on this — cross-language verifier compatibility (Python `pyjcs`, Go `gowebpki/jcs`, Rust `serde-jcs`) hinges on byte-identical output. The reference verifier in `packages/verifier-cli` keeps an independent copy by design — diff them to confirm semantic equivalence.
+14. The bundle artifact (`pipeline/bundle.ts`) is the **V2** primary output of a job, NOT a PDF. Schema is `VerificationBundle` version 2 with `issuer` / `subject` / `methodology` / `results` (with `txMerkleRoot`) / `validity` / `humanReadable` / `conformance` blocks. JSON Schema at `/schemas/v2/bundle.json`. Verifiers re-canonicalize via RFC 8785 the bundle minus `signature` + `payloadHash`, recompute SHA-256 to match `payloadHash`, reconstruct the Merkle root over enumerated entries, then verify RSA-PSS-SHA256 against `issuer.operatorPublicKey`. Reference implementation: `packages/verifier-cli`. PDF view of a batch is post-MVP and returns 406 — the single-tx PDF is enriched with the same compliance sections (Summary / Validity / How to re-verify / What this does NOT say / Recovery / Conformance footer).
 15. Verify never knows about auth, tier, billing, or rate limits — those are upstream concerns. The only thing verify reads from request headers (besides `Idempotency-Key`) is `X-Tenant-Id`, which it treats as opaque.
 16. Job request body limit is **16 MB** (`express.json({ limit: '16mb' })`) and the per-job txId cap is **50,000**. Both must move together — bumping zod's `max(50_000)` without lifting the body limit produces silent 413 errors before zod validation runs. Keep them aligned.
 17. Status-conditional UPDATEs are load-bearing for cancellation correctness. Don't simplify `WHERE id = ? AND status = 'running'` to `WHERE id = ?` in `bumpRunCounters` / `recordResult` / `completeRun` / `failRun` / `cancelRun` — late-arriving worker writes will resurrect cancelled runs.
 18. Graceful shutdown drains the worker pool. `SIGTERM`/`SIGINT` triggers: (1) HTTP server stops accepting new connections, (2) timers stop, (3) `drainInflight(SHUTDOWN_DRAIN_MS)` waits for in-flight verifies — bounded by `SHUTDOWN_DRAIN_MS` (default 30s), (4) DB closes, exit. Anything still running after the drain cap is recovered by `sweepStaleRunning` on next boot. **Don't replace with `process.exit(0)` directly** — rolling deploys depend on this.
 19. The Prometheus registry (`utils/metrics.ts`) intentionally has **no per-tenant labels**. Tenant id has unbounded cardinality (one customer's misuse can blow up Prom's time-series count). Per-tenant accounting belongs at api-guard, which knows the tenant→customer mapping; verify exposes aggregate health only.
+20. Compliance text (the `conformance[]` array, methodology limitations, plain-language summary, how-to-reverify recipe) is centralized in `attestation/compliance.ts`. The JSON bundle and the single-tx PDF both pull from it — drift between the two artifacts is structurally prevented rather than hoped against. If you change what we claim alignment with, change it once there, and update `docs/COMPLIANCE.md`'s clause map alongside.
+21. The bundle's `validity.validUntil` is `producedAt + BUNDLE_RETENTION_MONTHS` (default 6 months — EU AI Act Art. 19 floor). The signature itself is cryptographically valid forever; `validUntil` is the **audit-window** declaration. Verifiers past validUntil should treat the bundle as expired for fresh audit purposes but can still re-derive every claim.
 
 ## API Endpoints
 
@@ -133,6 +141,7 @@ Ops (no tenant header — internal probes / scrape):
 Misc:
 
 - `GET /api/config` — runtime frontend config (public gateway URL for image previews)
+- `GET /schemas/v2/bundle.json` — JSON Schema 2020-12 for the VerificationBundle V2 artifact (referenced by every bundle's `$schema` field)
 
 ## Console Integration
 

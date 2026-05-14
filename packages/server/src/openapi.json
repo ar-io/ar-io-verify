@@ -506,7 +506,7 @@
             "description": "Signed verification bundle (canonical JSON, byte-identical to what was signed)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/VerificationBundleV1" }
+                "schema": { "$ref": "#/components/schemas/VerificationBundleV2" }
               }
             }
           },
@@ -552,6 +552,22 @@
             }
           },
           "401": { "$ref": "#/components/responses/TenantMissing" }
+        }
+      }
+    },
+    "/schemas/v2/bundle.json": {
+      "get": {
+        "summary": "JSON Schema for the VerificationBundle V2 artifact",
+        "description": "JSON Schema 2020-12 describing the bundle returned by GET /api/v1/jobs/:id/report. Every signed bundle's `$schema` field points here. Use this for structural conformance checking independent of signature verification.",
+        "tags": ["System"],
+        "responses": {
+          "200": {
+            "description": "JSON Schema 2020-12 document",
+            "content": {
+              "application/schema+json": { "schema": { "type": "object" } }
+            }
+          },
+          "404": { "description": "Schema file not bundled with this build (dev only)" }
         }
       }
     }
@@ -842,66 +858,182 @@
           "createdAt": { "type": "integer" }
         }
       },
-      "VerificationBundleV1": {
+      "VerificationBundleV2": {
         "type": "object",
-        "description": "Canonical, operator-signed verification bundle. Verifiers re-serialize the bundle minus `signature` and `payloadHash`, recompute SHA-256 to match `payloadHash`, then verify RSA-PSS-SHA256 of `signature` against `operatorPublicKey`.",
+        "description": "Audit-grade operator-signed verification bundle. Canonicalized via RFC 8785 (JCS), bound by SHA-256 payloadHash, signed RSA-PSS-SHA256. See /schemas/v2/bundle.json for the canonical JSON Schema and docs/COMPLIANCE.md for the clause-by-clause framework map. Reference offline verifier: packages/verifier-cli.",
         "properties": {
-          "version": { "type": "integer", "enum": [1] },
-          "type": { "type": "string", "enum": ["verify.bundle.run"] },
+          "$schema": { "type": "string", "format": "uri" },
+          "@context": { "type": "string", "format": "uri" },
+          "type": { "type": "string", "enum": ["VerificationBundle"] },
+          "version": { "type": "integer", "enum": [2] },
+          "id": { "type": "string", "description": "Stable URN: urn:ar-io-verify:<jobId>:<runId>" },
           "jobId": { "type": "string" },
           "runId": { "type": "string" },
           "tenantId": { "type": "string" },
-          "operator": {
-            "type": "string",
-            "nullable": true,
-            "description": "Arweave wallet address"
-          },
-          "operatorPublicKey": { "type": "string", "nullable": true },
-          "gateway": { "type": "string", "nullable": true },
-          "startedAt": { "type": "string", "format": "date-time" },
-          "finishedAt": { "type": "string", "format": "date-time" },
-          "input": {
+          "issuer": {
             "type": "object",
             "properties": {
-              "type": { "type": "string", "enum": ["txIds"] },
-              "ids": { "type": "array", "items": { "type": "string" } }
+              "operator": {
+                "type": "string",
+                "nullable": true,
+                "description": "Operator Arweave wallet address"
+              },
+              "operatorPublicKey": { "type": "string", "nullable": true },
+              "gateway": {
+                "type": "object",
+                "properties": {
+                  "host": { "type": "string", "nullable": true },
+                  "url": { "type": "string", "nullable": true },
+                  "softwareVersion": { "type": "string" }
+                }
+              },
+              "trustAnchor": { "type": "string", "example": "self-asserted-arweave-wallet" },
+              "independence": { "type": "string", "example": "third-party-from-data-owner" }
             }
           },
-          "totals": {
+          "subject": {
             "type": "object",
             "properties": {
-              "verified": { "type": "integer" },
-              "tampered": { "type": "integer" },
-              "unavailable": { "type": "integer" },
-              "cacheHit": { "type": "integer" },
-              "bytesFetched": { "type": "integer" },
-              "total": { "type": "integer" }
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": { "type": "string", "enum": ["txIds"] },
+                  "ids": { "type": "array", "items": { "type": "string" } }
+                }
+              },
+              "network": { "type": "string", "example": "arweave-mainnet" },
+              "totalCount": { "type": "integer" }
             }
           },
-          "deltas": {
-            "nullable": true,
+          "methodology": {
             "type": "object",
-            "description": "Diffs vs the previous run for this job. Always null until scheduled jobs ship (post-MVP).",
             "properties": {
-              "verified": { "type": "integer" },
-              "tampered": { "type": "integer" },
-              "unavailable": { "type": "integer" }
+              "checks": { "type": "array", "items": { "type": "string" } },
+              "signatureAlgorithms": { "type": "array", "items": { "type": "string" } },
+              "deepHashSpec": { "type": "string" },
+              "canonicalization": { "type": "string", "enum": ["RFC8785"] },
+              "assuranceLevel": { "type": "string", "enum": ["cryptographic-proof"] },
+              "knownLimitations": { "type": "array", "items": { "type": "string" } },
+              "referenceVerifier": { "type": "string", "format": "uri" }
             }
           },
-          "failures": {
+          "results": {
+            "type": "object",
+            "properties": {
+              "verified": {
+                "type": "array",
+                "description": "Per-tx evidence for verified outcomes (txId, sha256, owner, block, recovery offsets). Capped at 1000 entries.",
+                "items": { "$ref": "#/components/schemas/BundleVerifiedEntry" }
+              },
+              "failed": {
+                "type": "array",
+                "description": "Per-tx failure rows (tampered / unavailable). Capped at 1000 entries.",
+                "items": { "$ref": "#/components/schemas/BundleFailedEntry" }
+              },
+              "verifiedTruncated": { "type": "boolean" },
+              "failuresTruncated": { "type": "boolean" },
+              "txMerkleRoot": {
+                "type": "string",
+                "description": "SHA-256 Merkle root (base64url) over canonical per-tx entries — enables inclusion proofs without holding the whole bundle"
+              },
+              "totals": {
+                "type": "object",
+                "properties": {
+                  "verified": { "type": "integer" },
+                  "tampered": { "type": "integer" },
+                  "unavailable": { "type": "integer" },
+                  "cacheHit": { "type": "integer" },
+                  "bytesFetched": { "type": "integer" },
+                  "total": { "type": "integer" }
+                }
+              }
+            }
+          },
+          "validity": {
+            "type": "object",
+            "description": "Audit-window declaration. Signature itself is cryptographically valid forever; this is the retention horizon. Default P6M = EU AI Act Art. 19 floor.",
+            "properties": {
+              "producedAt": { "type": "string", "format": "date-time" },
+              "validFrom": { "type": "string", "format": "date-time" },
+              "validUntil": { "type": "string", "format": "date-time" },
+              "retentionPolicy": { "type": "string", "example": "P6M" },
+              "timeSource": { "type": "string", "example": "system-clock" }
+            }
+          },
+          "humanReadable": {
+            "type": "object",
+            "description": "Plain-language sections satisfying EU AI Act Art. 13 'comprehensible to deployers' + ISAE 3000 §69(k) disclaimers.",
+            "properties": {
+              "summary": { "type": "string" },
+              "limitations": { "type": "string" },
+              "howToReverify": { "type": "string" }
+            }
+          },
+          "conformance": {
             "type": "array",
-            "description": "Failed-tx detail, capped at 1000 entries. Beyond the cap, query /jobs/:id/results.",
-            "items": { "$ref": "#/components/schemas/JobResult" }
+            "items": { "type": "string" },
+            "description": "Claimed structural alignment with named standards. See docs/COMPLIANCE.md for the clause map."
           },
-          "failuresTruncated": { "type": "boolean" },
           "payloadHash": {
             "type": "string",
-            "description": "SHA-256 (base64url) of canonical bundle minus signature and payloadHash fields"
+            "description": "SHA-256 (base64url) of RFC-8785 canonical(bundle - {payloadHash, signature})"
           },
+          "signatureAlgorithm": { "type": "string", "enum": ["RSA-PSS-SHA256"] },
           "signature": {
             "type": "string",
             "nullable": true,
             "description": "RSA-PSS-SHA256 signature (base64url). Null if no operator wallet is configured."
+          }
+        }
+      },
+      "BundleVerifiedEntry": {
+        "type": "object",
+        "properties": {
+          "txId": { "type": "string" },
+          "level": { "type": "integer", "minimum": 1, "maximum": 3 },
+          "dataSha256": { "type": "string", "nullable": true },
+          "owner": { "type": "string", "nullable": true },
+          "blockHeight": { "type": "integer", "nullable": true },
+          "blockTimestamp": { "type": "string", "nullable": true, "format": "date-time" },
+          "signatureType": { "type": "integer", "nullable": true },
+          "isBundled": { "type": "boolean" },
+          "bundleRootTxId": { "type": "string", "nullable": true },
+          "recovery": { "$ref": "#/components/schemas/RecoveryBlock" },
+          "verificationId": { "type": "string", "nullable": true }
+        }
+      },
+      "BundleFailedEntry": {
+        "type": "object",
+        "properties": {
+          "txId": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["tampered", "unavailable"] },
+          "failureReason": { "type": "string", "nullable": true },
+          "verificationId": { "type": "string", "nullable": true }
+        }
+      },
+      "RecoveryBlock": {
+        "type": "object",
+        "description": "Where on Arweave this data lives such that a customer can re-fetch it directly from any peer, independent of this verifier or any specific gateway.",
+        "properties": {
+          "arweave": {
+            "type": "object",
+            "nullable": true,
+            "description": "L1 weave-level pointer (or its parent bundle for L2)",
+            "properties": {
+              "txId": { "type": "string" },
+              "weaveSize": { "type": "integer" },
+              "weaveOffset": { "type": "integer" }
+            }
+          },
+          "dataItem": {
+            "type": "object",
+            "nullable": true,
+            "description": "ANS-104 byte offsets within the parent bundle binary (L2 only)",
+            "properties": {
+              "headerOffset": { "type": "integer" },
+              "dataOffset": { "type": "integer" },
+              "dataSize": { "type": "integer" }
+            }
           }
         }
       }
