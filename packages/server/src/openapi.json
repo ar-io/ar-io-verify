@@ -825,11 +825,11 @@
               "tx_id_mismatch",
               "data_hash_mismatch",
               "gateway_timeout",
-              "gateway_5xx",
+              "raw_data_unavailable",
               "gateway_404",
               "binary_header_unavailable",
               "data_too_large",
-              "no_signature",
+              "gateway_signature_unavailable",
               "job_cancelled",
               "unknown"
             ]
@@ -988,14 +988,35 @@
       },
       "BundleVerifiedEntry": {
         "type": "object",
+        "description": "Per-tx evidence row. At least one cryptographic binding to the data (`dataSha256` or `dataRoot`) is non-null for any `verified` row.",
         "properties": {
           "txId": { "type": "string" },
           "level": { "type": "integer", "minimum": 1, "maximum": 3 },
-          "dataSha256": { "type": "string", "nullable": true },
+          "dataSha256": {
+            "type": "string",
+            "nullable": true,
+            "description": "Independently computed SHA-256 (base64url) of downloaded bytes. Null when raw data wasn't fetched — see `dataRoot`."
+          },
+          "dataRoot": {
+            "type": "string",
+            "nullable": true,
+            "description": "Arweave L1 format-2 chunk Merkle root from the on-chain tx. Non-null binding to the data the signer attested, even when bytes weren't fetched."
+          },
+          "signatureType": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "arweave-tx-rsa-pss",
+              "ans104-rsa-pss",
+              "ans104-ed25519",
+              "ans104-ecdsa",
+              null
+            ],
+            "description": "Named algorithm that produced this proof — tells the auditor which primitive to invoke for independent re-verification."
+          },
           "owner": { "type": "string", "nullable": true },
           "blockHeight": { "type": "integer", "nullable": true },
           "blockTimestamp": { "type": "string", "nullable": true, "format": "date-time" },
-          "signatureType": { "type": "integer", "nullable": true },
           "isBundled": { "type": "boolean" },
           "bundleRootTxId": { "type": "string", "nullable": true },
           "recovery": { "$ref": "#/components/schemas/RecoveryBlock" },

@@ -11,16 +11,27 @@ export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 export type ResultOutcome = 'verified' | 'tampered' | 'unavailable';
 export type JobInputType = 'txIds';
 
+/**
+ * Granular cause for a non-`verified` outcome. Names are chosen so an
+ * auditor reading the bundle in isolation can tell *why* a row didn't
+ * verify without spelunking the orchestrator. In particular:
+ *
+ *   `gateway_signature_unavailable` means "the serving gateway didn't
+ *   return enough to verify the signature" — NOT that the on-chain tx
+ *   is unsigned. The two failure modes look alike from outside, but
+ *   only the former is a data-availability issue; the latter would be
+ *   a security finding.
+ */
 export type FailureReason =
   | 'signature_mismatch'
   | 'tx_id_mismatch'
   | 'data_hash_mismatch'
   | 'gateway_timeout'
-  | 'gateway_5xx'
+  | 'raw_data_unavailable'
   | 'gateway_404'
   | 'binary_header_unavailable'
   | 'data_too_large'
-  | 'no_signature'
+  | 'gateway_signature_unavailable'
   | 'job_cancelled'
   | 'unknown';
 

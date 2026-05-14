@@ -33,6 +33,8 @@ function makeResult(txId: string): VerificationResult {
       dataHash: 'h',
       gatewayHash: 'h',
       hashMatch: true,
+      signatureType: null,
+      dataRoot: null,
     },
     owner: { address: 'addr', publicKey: null, addressVerified: true },
     metadata: { dataSize: 100, contentType: null, tags: [] },

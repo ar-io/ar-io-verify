@@ -21,6 +21,8 @@ function makeResult(overrides: Partial<VerificationResult> = {}): VerificationRe
       dataHash: 'testhash123456789012345678901234567890abc',
       gatewayHash: 'testhash123456789012345678901234567890abc',
       hashMatch: true,
+      signatureType: null,
+      dataRoot: null,
     },
     owner: {
       address: 'testowner12345678901234567890123456789012',
@@ -68,6 +70,8 @@ describe('PDF Generator', () => {
           dataHash: null,
           gatewayHash: null,
           hashMatch: null,
+          signatureType: null,
+          dataRoot: null,
         },
       })
     );

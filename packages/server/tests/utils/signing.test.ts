@@ -133,6 +133,8 @@ describe('Signing Module', () => {
         dataHash: 'testhash',
         gatewayHash: 'testhash',
         hashMatch: true,
+        signatureType: null,
+        dataRoot: null,
         signatureSkipReason: null,
       },
       existence: {

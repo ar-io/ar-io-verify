@@ -188,6 +188,68 @@ describeIfAvailable('verification bundle', () => {
     expect(bundleModule!.buildBundle('job_nope', 'run_nope')).toBeNull();
   });
 
+  it('verified rows project dataRoot + signatureType + recovery fallback', async () => {
+    // Mimic a CACHE row that pre-dates the recovery commit — recovery is
+    // undefined on it. The projection must default to a non-null recovery
+    // block so the schema stays satisfied.
+    const { job } = jobsModule!.createJob({
+      tenantId: 'tenant_a',
+      idempotencyKey: null,
+      inputType: 'txIds',
+      inputSpec: { ids: ['tx_legacy_cache_row_padded_to_43_chars_xx'] },
+      totalCount: 1,
+    });
+    const run = jobsModule!.startRun(job.id);
+    const legacyResult = {
+      verificationId: 'vrf_legacy',
+      timestamp: '2026-05-14T00:00:00Z',
+      txId: 'tx_legacy_cache_row_padded_to_43_chars_xx',
+      level: 3,
+      existence: { status: 'confirmed', blockHeight: 1, blockTimestamp: null, blockId: null },
+      authenticity: {
+        status: 'signature_verified',
+        signatureValid: true,
+        signatureSkipReason: null,
+        dataHash: null, // Mimic format-2 L1 where bytes weren't downloaded
+        gatewayHash: null,
+        hashMatch: null,
+        signatureType: 'arweave-tx-rsa-pss',
+        dataRoot: 'root_root_root_root_root_root_root_root_x',
+      },
+      owner: { address: 'owner_x', publicKey: null, addressVerified: null },
+      metadata: { dataSize: null, contentType: null, tags: [] },
+      bundle: { isBundled: false, rootTransactionId: null },
+      // NB: `recovery` intentionally omitted, mimicking a pre-V2 cache row
+      gatewayAssessment: { verified: null, stable: null, trusted: null, hops: null },
+      attestation: null,
+      links: { dashboard: null, pdf: null, rawData: null },
+    };
+    const db = dbModule!.getDb();
+    db.prepare(
+      `INSERT OR REPLACE INTO verification_results (id, tx_id, result_json, created_at)
+       VALUES (?, ?, ?, datetime('now'))`
+    ).run('vrf_legacy', 'tx_legacy_cache_row_padded_to_43_chars_xx', JSON.stringify(legacyResult));
+    jobsModule!.recordResult({
+      jobRunId: run.id,
+      txId: 'tx_legacy_cache_row_padded_to_43_chars_xx',
+      verificationId: 'vrf_legacy',
+      outcome: 'verified',
+      cacheHit: true,
+      failureReason: null,
+    });
+    jobsModule!.bumpRunCounters(run.id, { verified: 1 });
+    jobsModule!.completeRun(run.id, null);
+
+    const bundle = bundleModule!.buildBundle(job.id, run.id)!;
+    expect(bundle.results.verified).toHaveLength(1);
+    const row = bundle.results.verified[0];
+    expect(row.dataSha256).toBeNull();
+    expect(row.dataRoot).toBe('root_root_root_root_root_root_root_root_x');
+    expect(row.signatureType).toBe('arweave-tx-rsa-pss');
+    // Recovery defaulted to non-null block even though the cache row lacked it
+    expect(row.recovery).toEqual({ arweave: null, dataItem: null });
+  });
+
   it('V2 carries all compliance-anchor fields (EU AI Act, VC 2.0, C2PA, RFC 8785)', () => {
     const { job } = jobsModule!.createJob({
       tenantId: 'tenant_a',

@@ -31,6 +31,31 @@ export interface VerificationResult {
     gatewayHash: string | null;
     /** Whether our independent hash matches the gateway's digest */
     hashMatch: boolean | null;
+    /**
+     * Named algorithm that verified the signature, so auditors know which
+     * code path produced the proof and can re-verify with the right primitive.
+     *
+     *   "arweave-tx-rsa-pss" — L1 native Arweave tx (always RSA-PSS over Arweave deep hash)
+     *   "ans104-rsa-pss"     — ANS-104 data item, signature type 1
+     *   "ans104-ed25519"     — ANS-104 data item, signature type 2 (Solana etc.)
+     *   "ans104-ecdsa"       — ANS-104 data item, signature type 3 (Ethereum)
+     *   null                 — signature was not verified (skip / fail)
+     */
+    signatureType:
+      | 'arweave-tx-rsa-pss'
+      | 'ans104-rsa-pss'
+      | 'ans104-ed25519'
+      | 'ans104-ecdsa'
+      | null;
+    /**
+     * Arweave L1 format-2 data_root (chunk Merkle root), when applicable.
+     * For format-2 L1 transactions, the signature is over a deep hash that
+     * includes `dataRoot` — so even when the verifier never downloaded the
+     * raw bytes (because they're large or the gateway didn't serve them),
+     * `dataRoot` is a non-null cryptographic binding to the data the
+     * signer asserted exists. Null for L1 format-1 or L2 data items.
+     */
+    dataRoot: string | null;
   };
 
   /** Owner / authorship information */

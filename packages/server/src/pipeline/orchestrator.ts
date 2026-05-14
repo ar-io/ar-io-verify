@@ -166,6 +166,15 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
   // Step 4: Signature verification
   const signatureB64 = headers?.signature ?? l1TxData?.signature ?? null;
 
+  // Determine the named algorithm BEFORE attempting — even if verification
+  // is skipped or fails, the algorithm intent is the one the bundle should
+  // report (helpful for triage). Final null/value is set after verification.
+  const intendedSignatureType = pickSignatureType({
+    isL1: !!l1TxData,
+    parsedHeaderSigType: parsedHeader?.signatureType ?? null,
+    headerSigType: headers?.signatureType ?? null,
+  });
+
   const sigResult = await attemptSignatureVerification({
     parsedHeader,
     signatureB64Url: signatureB64,
@@ -211,6 +220,13 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
       dataHash: independentHash,
       gatewayHash,
       hashMatch,
+      // The algorithm intent is reported regardless of skip/pass — the
+      // auditor needs to know which signer path applied to this tx, even
+      // when verification was skipped (helpful for triage).
+      signatureType: intendedSignatureType,
+      // dataRoot is meaningful only for L1 format-2 (and is the on-chain
+      // binding to the data even when raw bytes weren't downloaded).
+      dataRoot: l1TxData?.format === 2 ? l1TxData.dataRoot : null,
     },
     owner: {
       address: ownerAddress,
@@ -435,6 +451,31 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// Signature type naming
+// ---------------------------------------------------------------------------
+
+/**
+ * Pick the named algorithm string the bundle should report for this tx.
+ *
+ *   L1 native Arweave tx     → always "arweave-tx-rsa-pss"
+ *   L2 ANS-104 data item     → mapped from the numeric sig type (1/2/3)
+ *
+ * Returns null only when we have NO signal at all about the algorithm.
+ */
+function pickSignatureType(input: {
+  isL1: boolean;
+  parsedHeaderSigType: number | null;
+  headerSigType: number | null;
+}): VerificationResult['authenticity']['signatureType'] {
+  if (input.isL1) return 'arweave-tx-rsa-pss';
+  const t = input.parsedHeaderSigType ?? input.headerSigType;
+  if (t === 1) return 'ans104-rsa-pss';
+  if (t === 2) return 'ans104-ed25519';
+  if (t === 3) return 'ans104-ecdsa';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Recovery pointers
 // ---------------------------------------------------------------------------
 
@@ -519,6 +560,8 @@ function buildNotFoundResult(
       dataHash: null,
       gatewayHash: null,
       hashMatch: null,
+      signatureType: null,
+      dataRoot: null,
     },
     owner: { address: null, publicKey: null, addressVerified: null },
     metadata: { dataSize: null, contentType: null, tags: [] },

@@ -42,6 +42,8 @@ function makeResult(id: string, txId: string): VerificationResult {
       dataHash: 'hash',
       gatewayHash: 'hash',
       hashMatch: true,
+      signatureType: null,
+      dataRoot: null,
     },
     owner: { address: 'addr', publicKey: null, addressVerified: true },
     metadata: { dataSize: 100, contentType: 'text/plain', tags: [] },

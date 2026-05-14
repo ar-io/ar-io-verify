@@ -236,6 +236,12 @@ export async function generatePdf(result: VerificationResult): Promise<Uint8Arra
     result.owner.address ? `Owner Address: ${result.owner.address}` : null,
     result.authenticity.dataHash ? `Data SHA-256: ${result.authenticity.dataHash}` : null,
     result.authenticity.gatewayHash ? `Gateway SHA-256: ${result.authenticity.gatewayHash}` : null,
+    result.authenticity.dataRoot
+      ? `Data Root (L1 format-2): ${result.authenticity.dataRoot}`
+      : null,
+    result.authenticity.signatureType
+      ? `Signature Algorithm: ${result.authenticity.signatureType}`
+      : null,
     result.gatewayAssessment.hops !== null ? `Data Hops: ${result.gatewayAssessment.hops}` : null,
   ].filter(Boolean) as string[];
 

@@ -42,11 +42,28 @@ const ENTRY_CAP = 1000;
 export interface BundleVerifiedEntry {
   txId: string;
   level: 1 | 2 | 3;
+  /**
+   * Per-tx cryptographic bindings to the data. At least one of these is
+   * always non-null for a verified row (otherwise the row wouldn't have
+   * been classified as `verified`):
+   *
+   *   - `dataSha256` — SHA-256 of the bytes we independently downloaded.
+   *     Null when raw data wasn't fetched (large/missing), in which case
+   *     verification was anchored via `dataRoot` (L1 format-2) or via
+   *     the L2 data item's own signature.
+   *   - `dataRoot`   — Arweave L1 format-2 chunk Merkle root. The on-chain
+   *     binding the signer attested. Recoverable from any Arweave peer
+   *     via `recovery.arweave`.
+   *   - `signatureType` — Named algorithm string that verified this row.
+   *     Lets the auditor pick the right primitive when independently
+   *     re-verifying.
+   */
   dataSha256: string | null;
+  dataRoot: string | null;
+  signatureType: VerificationResult['authenticity']['signatureType'];
   owner: string | null;
   blockHeight: number | null;
   blockTimestamp: string | null;
-  signatureType: number | null;
   isBundled: boolean;
   bundleRootTxId: string | null;
   recovery: VerificationResult['recovery'];
@@ -326,30 +343,20 @@ function projectVerified(
     txId: r.txId,
     level: r.level,
     dataSha256: r.authenticity.dataHash,
+    dataRoot: r.authenticity.dataRoot ?? null,
+    signatureType: r.authenticity.signatureType ?? null,
     owner: r.owner.address,
     blockHeight: r.existence.blockHeight,
     blockTimestamp: r.existence.blockTimestamp,
-    signatureType: extractSignatureType(r),
     isBundled: r.bundle.isBundled,
     bundleRootTxId: r.bundle.rootTransactionId,
-    recovery: r.recovery,
+    // Default for cache rows that pre-date the recovery commit — they're
+    // structurally pre-V2 and may not carry the recovery block. Schema
+    // declares recovery as required; this default keeps the bundle
+    // conformant even on legacy cache hits.
+    recovery: r.recovery ?? { arweave: null, dataItem: null },
     verificationId,
   };
-}
-
-/**
- * The numeric ANS-104 signature type that produced this proof. Stored in
- * `authenticity.signatureSkipReason` only when verification was *skipped*,
- * so we infer from the verification path that actually succeeded.
- *
- * For L1 native txs there is no ANS-104 sig type — return null.
- */
-function extractSignatureType(_r: VerificationResult): number | null {
-  // We don't currently persist the chosen sig type on the result; until we
-  // do, return null. Auditors get the algorithm from `methodology.signatureAlgorithms`
-  // and the binding via `dataSha256` + `owner` — sig-type granularity is a
-  // future field.
-  return null;
 }
 
 function humanReadableSummary(t: {

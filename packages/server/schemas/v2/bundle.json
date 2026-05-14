@@ -113,10 +113,20 @@
               "txId": { "type": "string" },
               "level": { "type": "integer", "minimum": 1, "maximum": 3 },
               "dataSha256": { "type": ["string", "null"] },
+              "dataRoot": { "type": ["string", "null"] },
+              "signatureType": {
+                "type": ["string", "null"],
+                "enum": [
+                  "arweave-tx-rsa-pss",
+                  "ans104-rsa-pss",
+                  "ans104-ed25519",
+                  "ans104-ecdsa",
+                  null
+                ]
+              },
               "owner": { "type": ["string", "null"] },
               "blockHeight": { "type": ["integer", "null"] },
               "blockTimestamp": { "type": ["string", "null"] },
-              "signatureType": { "type": ["integer", "null"] },
               "isBundled": { "type": "boolean" },
               "bundleRootTxId": { "type": ["string", "null"] },
               "recovery": { "$ref": "#/$defs/recovery" },
