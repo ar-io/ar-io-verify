@@ -1,5 +1,97 @@
 import type { VerificationResult } from '../types.js';
 
+/**
+ * One-paragraph plain-language summary for the top of the PDF — written
+ * for a non-technical auditor under EU AI Act Art. 13 "comprehensible to
+ * deployers" and the US Plain Writing Act tone. Mirrors the
+ * `humanReadable.summary` block on the batch bundle JSON.
+ */
+export function plainLanguageSummary(result: VerificationResult): string {
+  const ownerNote = result.owner.address
+    ? ` The signing owner address is ${result.owner.address}.`
+    : '';
+  if (result.authenticity.status === 'signature_verified') {
+    return (
+      'This certificate attests that the Arweave transaction below was found on chain, ' +
+      'its data was independently downloaded and SHA-256-fingerprinted, and the on-chain ' +
+      'RSA-PSS signature was mathematically verified against that data. This is a ' +
+      'cryptographic proof — not an opinion — that the stated owner signed this exact ' +
+      'data and that the data has not been modified since.' +
+      ownerNote
+    );
+  }
+  if (result.authenticity.status === 'hash_verified') {
+    return (
+      'This certificate attests that the Arweave transaction below was found on chain ' +
+      'and that an independent SHA-256 fingerprint of its data was computed. The full ' +
+      'cryptographic signature check could not be completed (see Statement of Facts ' +
+      'below for the specific reason). The hash fingerprint is still a meaningful ' +
+      'integrity signal but does not by itself prove authorship.' +
+      ownerNote
+    );
+  }
+  return (
+    'This certificate documents an attempt to verify the Arweave transaction below. ' +
+    'Neither the signature nor the data hash check could be completed against this ' +
+    'gateway — see Statement of Facts and the Cryptographic Proof Appendix for the ' +
+    'granular reason. The data may still exist on Arweave and be verifiable from ' +
+    'another peer; this report records what THIS verifier could confirm at the ' +
+    'attestedAt time.'
+  );
+}
+
+/**
+ * Honest disclaimer mirroring the bundle's `humanReadable.limitations`.
+ * Anchored to ISAE 3000 §69(k) (limited-assurance disclaimer) and EU AI
+ * Art. 13(3)(b) "limitations of the system" transparency requirement.
+ */
+export const PDF_LIMITATIONS = (
+  'This report makes no claim about the meaning, legality, or fitness-for-purpose of the ' +
+  'data — only its cryptographic integrity and on-chain existence as verified against the ' +
+  'serving gateway. Timestamps are taken from the operator’s system clock and are NOT ' +
+  'anchored to a trusted timestamp authority (RFC 3161) — operator-clock backdating is ' +
+  'not defended against by this report version. Nothing here constitutes legal advice or ' +
+  'a professional assurance opinion under ISAE 3000.'
+).trim();
+
+/**
+ * Reproducibility recipe for an offline third-party verifier. Bundles
+ * the same instruction the JSON `humanReadable.howToReverify` field gives.
+ */
+export const PDF_HOW_TO_REVERIFY = (
+  'To re-verify this certificate offline: extract the Attestation Payload JSON below, ' +
+  'canonicalize it via RFC 8785 (JCS — sorted keys, no whitespace), SHA-256 the canonical ' +
+  'bytes and confirm Payload Hash, then verify the RSA-PSS-SHA256 Signature against the ' +
+  'embedded operator public key. A reference verifier is published at ' +
+  'github.com/ar-io/ar-io-verify/tree/main/packages/verifier-cli.'
+).trim();
+
+/**
+ * Render the recovery block for the PDF: where on Arweave this data lives
+ * such that the customer can re-fetch it directly from any peer.
+ */
+export function recoveryStatement(recovery: VerificationResult['recovery']): string[] {
+  const lines: string[] = [];
+  if (recovery.arweave) {
+    lines.push(
+      `Weave Pointer: tx ${recovery.arweave.txId}, ` +
+        `weave size ${recovery.arweave.weaveSize.toLocaleString()} bytes, ` +
+        `weave end-offset ${recovery.arweave.weaveOffset.toLocaleString()}.`
+    );
+  }
+  if (recovery.dataItem) {
+    lines.push(
+      `Data Item Pointer (within bundle): header offset ${recovery.dataItem.headerOffset.toLocaleString()}, ` +
+        `data offset ${recovery.dataItem.dataOffset.toLocaleString()}, ` +
+        `data size ${recovery.dataItem.dataSize.toLocaleString()} bytes.`
+    );
+  }
+  if (lines.length === 0) {
+    lines.push('No recovery pointer was available from the serving gateway.');
+  }
+  return lines;
+}
+
 export const METHODOLOGY_VERIFIED = `This certificate documents the results of independent cryptographic verification \
 performed on data stored on the Arweave blockweave. The data identified by this \
 transaction was verified by: (1) confirming transaction existence on the blockchain, \

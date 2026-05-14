@@ -9,7 +9,14 @@ import {
   authenticityStatement,
   bundleStatement,
   gatewayAssessmentStatement,
+  plainLanguageSummary,
+  PDF_LIMITATIONS,
+  PDF_HOW_TO_REVERIFY,
+  recoveryStatement,
 } from './templates.js';
+import { BUNDLE_CONFORMANCE, CANONICALIZATION_SPEC } from './compliance.js';
+import { SERVER_VERSION } from '../version.js';
+import { config } from '../config.js';
 import type { VerificationResult } from '../types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -105,6 +112,27 @@ export async function generatePdf(result: VerificationResult): Promise<Uint8Arra
     thickness: 1,
     color: rgb(0.8, 0.8, 0.8),
   });
+  y -= 20;
+
+  // Plain-language Summary — leads the report so a non-technical auditor
+  // can absorb the verdict before getting into the cryptographic detail.
+  // EU AI Act Art. 13 + Plain Writing Act tone.
+  y = drawText(page, 'Summary', fontBold, 13, MARGIN, y, rgb(0.1, 0.1, 0.1));
+  y -= 8;
+  const summaryResult = drawWrappedText(
+    page,
+    doc,
+    plainLanguageSummary(result),
+    fontRegular,
+    9,
+    MARGIN,
+    y,
+    CONTENT_WIDTH,
+    13,
+    rgb(0.15, 0.15, 0.15)
+  );
+  page = summaryResult.page;
+  y = summaryResult.y;
   y -= 20;
 
   // Methodology
@@ -219,6 +247,111 @@ export async function generatePdf(result: VerificationResult): Promise<Uint8Arra
     y = drawText(page, line, fontRegular, 8, MARGIN, y, rgb(0.3, 0.3, 0.3));
     y -= 4;
   }
+
+  // Recovery on Arweave — where this data lives such that a customer can
+  // re-fetch it directly from the network without involving this verifier
+  // or this gateway. Surface the L1 weave offset and (for L2) the data
+  // item offset within the parent bundle.
+  y -= 12;
+  if (y < MARGIN + 80) {
+    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - MARGIN;
+  }
+  y = drawText(page, 'Recovery on Arweave', fontBold, 13, MARGIN, y, rgb(0.1, 0.1, 0.1));
+  y -= 8;
+  for (const line of recoveryStatement(result.recovery)) {
+    if (y < MARGIN + 30) {
+      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
+    const rResult = drawWrappedText(
+      page,
+      doc,
+      line,
+      fontRegular,
+      8,
+      MARGIN,
+      y,
+      CONTENT_WIDTH,
+      12,
+      rgb(0.2, 0.2, 0.2)
+    );
+    page = rResult.page;
+    y = rResult.y - 2;
+  }
+
+  // Validity window — anchored to EU AI Act Art. 19 (≥6mo retention floor)
+  y -= 12;
+  if (y < MARGIN + 80) {
+    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - MARGIN;
+  }
+  y = drawText(page, 'Validity', fontBold, 13, MARGIN, y, rgb(0.1, 0.1, 0.1));
+  y -= 8;
+  const retentionMonths = config.BUNDLE_RETENTION_MONTHS ?? 6;
+  const validFrom = new Date(result.timestamp);
+  const validUntil = new Date(validFrom);
+  validUntil.setMonth(validUntil.getMonth() + retentionMonths);
+  const validityLines = [
+    `Produced At: ${result.timestamp}`,
+    `Valid From:  ${validFrom.toISOString()}`,
+    `Valid Until: ${validUntil.toISOString()} (retention policy P${retentionMonths}M, EU AI Act Art. 19 floor)`,
+    'Time Source: operator system clock (no RFC 3161 trusted timestamp on this version)',
+  ];
+  for (const line of validityLines) {
+    if (y < MARGIN + 20) {
+      page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
+    y = drawText(page, line, fontRegular, 8, MARGIN, y, rgb(0.2, 0.2, 0.2));
+    y -= 2;
+  }
+
+  // What this report does NOT say — ISAE 3000 §69(k) + EU AI Act Art. 13
+  y -= 12;
+  if (y < MARGIN + 80) {
+    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - MARGIN;
+  }
+  y = drawText(page, 'What this report does NOT say', fontBold, 13, MARGIN, y, rgb(0.1, 0.1, 0.1));
+  y -= 8;
+  const limResult = drawWrappedText(
+    page,
+    doc,
+    PDF_LIMITATIONS,
+    fontRegular,
+    8,
+    MARGIN,
+    y,
+    CONTENT_WIDTH,
+    12,
+    rgb(0.2, 0.2, 0.2)
+  );
+  page = limResult.page;
+  y = limResult.y;
+
+  // How to re-verify offline — NIST AI RMF MEASURE-2.7 reproducibility
+  y -= 12;
+  if (y < MARGIN + 80) {
+    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - MARGIN;
+  }
+  y = drawText(page, 'How to re-verify offline', fontBold, 13, MARGIN, y, rgb(0.1, 0.1, 0.1));
+  y -= 8;
+  const reverifyResult = drawWrappedText(
+    page,
+    doc,
+    PDF_HOW_TO_REVERIFY,
+    fontRegular,
+    8,
+    MARGIN,
+    y,
+    CONTENT_WIDTH,
+    12,
+    rgb(0.2, 0.2, 0.2)
+  );
+  page = reverifyResult.page;
+  y = reverifyResult.y;
 
   // Tags
   if (result.metadata.tags.length > 0) {
@@ -361,6 +494,37 @@ export async function generatePdf(result: VerificationResult): Promise<Uint8Arra
     page = pResult.page;
     y = pResult.y;
   }
+
+  // Conformance footer — single line at the bottom, naming the standards
+  // this certificate claims structural alignment with. Stable across PDFs.
+  y -= 14;
+  if (y < MARGIN + 30) {
+    page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - MARGIN;
+  }
+  page.drawLine({
+    start: { x: MARGIN, y },
+    end: { x: PAGE_WIDTH - MARGIN, y },
+    thickness: 0.5,
+    color: rgb(0.8, 0.8, 0.8),
+  });
+  y -= 10;
+  const conformanceLine =
+    `Conformance: ${BUNDLE_CONFORMANCE.join(' · ')} · ` +
+    `Canonicalization: ${CANONICALIZATION_SPEC} · ` +
+    `Signature: RSA-PSS-SHA256 · Verify Server: v${SERVER_VERSION}`;
+  drawWrappedText(
+    page,
+    doc,
+    conformanceLine,
+    fontRegular,
+    6,
+    MARGIN,
+    y,
+    CONTENT_WIDTH,
+    8,
+    rgb(0.4, 0.4, 0.4)
+  );
 
   return doc.save();
 }

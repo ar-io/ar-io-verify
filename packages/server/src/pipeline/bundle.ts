@@ -10,6 +10,13 @@ import { sha256B64Url } from '../utils/crypto.js';
 import { merkleRootFromCanonicalEntries } from '../utils/merkle.js';
 import { logger } from '../utils/logger.js';
 import { SERVER_VERSION } from '../version.js';
+import {
+  REFERENCE_VERIFIER_URL,
+  BUNDLE_CONFORMANCE,
+  SIGNATURE_ALGORITHM,
+  CANONICALIZATION_SPEC,
+  KNOWN_LIMITATIONS,
+} from '../attestation/compliance.js';
 import * as jobs from '../storage/jobs.js';
 import type { VerificationResult } from '../types.js';
 
@@ -17,9 +24,8 @@ export const BUNDLE_VERSION = 2;
 export const BUNDLE_TYPE = 'VerificationBundle';
 export const BUNDLE_SCHEMA_URL = 'https://verify.ar.io/schemas/v2/bundle.json';
 export const BUNDLE_CONTEXT_URL = 'https://verify.ar.io/contexts/v2';
-export const REFERENCE_VERIFIER_URL =
-  'https://github.com/ar-io/ar-io-verify/tree/main/packages/verifier-cli';
-export const SIGNATURE_ALGORITHM = 'RSA-PSS-SHA256';
+
+export { REFERENCE_VERIFIER_URL, SIGNATURE_ALGORITHM };
 
 /**
  * Cap on rows enumerated inside the bundle. Both verified and failed entries
@@ -235,13 +241,9 @@ export function buildBundle(jobId: string, runId: string): VerificationBundleV2 
       checks: ['existence', 'data_hash_sha256', 'signature_deep_hash'],
       signatureAlgorithms: ['RSA-PSS-SHA256', 'Ed25519', 'ECDSA-secp256k1'],
       deepHashSpec: 'ANS-104',
-      canonicalization: 'RFC8785',
+      canonicalization: CANONICALIZATION_SPEC,
       assuranceLevel: 'cryptographic-proof',
-      knownLimitations: [
-        'Ethereum ECDSA (signature type 3) may not verify all signer implementations.',
-        'L1/L2 detection reflects the serving gateway’s view, not absolute on-chain state.',
-        'unavailable outcomes are not cached — re-runs retry, not replay the last failure.',
-      ],
+      knownLimitations: KNOWN_LIMITATIONS,
       referenceVerifier: REFERENCE_VERIFIER_URL,
     },
 
@@ -284,12 +286,7 @@ export function buildBundle(jobId: string, runId: string): VerificationBundleV2 
         'recipe in `docs/COMPLIANCE.md`. The verifier needs only this JSON and Node ≥18.',
     },
 
-    conformance: [
-      'eu-ai-act-art-10-12-13-19-aligned',
-      'vc-2.0-structural',
-      'c2pa-2.x-aligned',
-      'rfc-8785-canonical-json',
-    ],
+    conformance: BUNDLE_CONFORMANCE,
 
     payloadHash: '',
     signatureAlgorithm: SIGNATURE_ALGORITHM,
