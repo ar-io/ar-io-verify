@@ -746,6 +746,41 @@ export function listFailuresForRun(jobRunId: string, limit = 100): JobResult[] {
   return rows.map(rowToResult);
 }
 
+/**
+ * List `verified` rows for a run, joined with the cached per-tx
+ * VerificationResult so the bundle builder can extract the audit-relevant
+ * fields (hash, owner, block, recovery offsets) without an N+1 lookup.
+ *
+ * `result_json` may be null if the cache row was pruned by the 30-day
+ * cleanup. Callers should skip rows with null result_json and log — by
+ * the time the bundle is built (immediately on run completion) the row
+ * is expected to be present, but defensive handling matters at scale.
+ */
+export function listVerifiedForRun(
+  jobRunId: string,
+  limit = 50_000
+): Array<{ txId: string; verificationId: string | null; resultJson: string | null }> {
+  const rows = getDb()
+    .prepare(
+      `SELECT r.tx_id AS tx_id, r.verification_id AS verification_id, v.result_json AS result_json
+         FROM job_results r
+         LEFT JOIN verification_results v ON v.id = r.verification_id
+        WHERE r.job_run_id = ? AND r.outcome = 'verified'
+        ORDER BY r.tx_id ASC
+        LIMIT ?`
+    )
+    .all(jobRunId, limit) as Array<{
+    tx_id: string;
+    verification_id: string | null;
+    result_json: string | null;
+  }>;
+  return rows.map((r) => ({
+    txId: r.tx_id,
+    verificationId: r.verification_id,
+    resultJson: r.result_json,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------

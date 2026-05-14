@@ -96,8 +96,8 @@ describeIfAvailable('bundle signing — operator-wallet round-trip', () => {
 
     const bundle = bundleModule!.buildBundle(job.id, run.id)!;
     expect(bundle.signature).not.toBeNull();
-    expect(bundle.operator).not.toBeNull();
-    expect(bundle.operatorPublicKey).not.toBeNull();
+    expect(bundle.issuer.operator).not.toBeNull();
+    expect(bundle.issuer.operatorPublicKey).not.toBeNull();
 
     // Reconstruct the signed bytes the way an external verifier would:
     // strip signature + payloadHash, deep-canonicalize, hash → matches payloadHash.
@@ -109,7 +109,7 @@ describeIfAvailable('bundle signing — operator-wallet round-trip', () => {
     // value of the bundle is that this verification needs nothing from the
     // verify server — only the operator's public key.
     const claimedPubKey = createPublicKey({
-      key: { kty: 'RSA', n: bundle.operatorPublicKey!, e: 'AQAB' },
+      key: { kty: 'RSA', n: bundle.issuer.operatorPublicKey!, e: 'AQAB' },
       format: 'jwk',
     });
     const ok = cryptoVerify(

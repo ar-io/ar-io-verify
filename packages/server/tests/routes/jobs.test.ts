@@ -297,9 +297,12 @@ describeIfAvailable('jobs HTTP routes', () => {
     expect(report.headers['content-type']).toContain('application/json');
     expect(report.headers['content-disposition']).toContain('verify-bundle-');
     const parsed = JSON.parse(report.text);
-    expect(parsed.type).toBe('verify.bundle.run');
+    expect(parsed.type).toBe('VerificationBundle');
+    expect(parsed.version).toBe(2);
     expect(parsed.tenantId).toBe('tenant_a');
-    expect(parsed.totals.verified).toBe(1);
+    expect(parsed.results.totals.verified).toBe(1);
+    expect(parsed.methodology.canonicalization).toBe('RFC8785');
+    expect(parsed.validity.retentionPolicy).toBe('P6M');
   });
 
   it('GET /jobs/:id/report 404s before the run completes', async () => {

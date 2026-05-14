@@ -1,117 +1,303 @@
 import { config } from '../config.js';
 import {
-  canonicalize,
   getOperatorAddress,
   getOperatorPublicKey,
   isSigningEnabled,
   signPayload,
 } from '../utils/signing.js';
+import { canonicalize } from '../utils/canonical.js';
 import { sha256B64Url } from '../utils/crypto.js';
+import { merkleRootFromCanonicalEntries } from '../utils/merkle.js';
+import { logger } from '../utils/logger.js';
+import { SERVER_VERSION } from '../version.js';
 import * as jobs from '../storage/jobs.js';
+import type { VerificationResult } from '../types.js';
+
+export const BUNDLE_VERSION = 2;
+export const BUNDLE_TYPE = 'VerificationBundle';
+export const BUNDLE_SCHEMA_URL = 'https://verify.ar.io/schemas/v2/bundle.json';
+export const BUNDLE_CONTEXT_URL = 'https://verify.ar.io/contexts/v2';
+export const REFERENCE_VERIFIER_URL =
+  'https://github.com/ar-io/ar-io-verify/tree/main/packages/verifier-cli';
+export const SIGNATURE_ALGORITHM = 'RSA-PSS-SHA256';
 
 /**
- * Bound on how many failure rows are embedded directly in the bundle.
- * Anything beyond this is queryable via GET /api/v1/jobs/:id/results — keeping
- * the bundle compact matters more for downstream tooling than completeness.
+ * Cap on rows enumerated inside the bundle. Both verified and failed entries
+ * are capped independently — beyond this, callers walk
+ * GET /api/v1/jobs/:id/results for the full list. The Merkle root is still
+ * computed over what's enumerated, so it represents only the embedded view.
  */
-const FAILURE_CAP = 1000;
+const ENTRY_CAP = 1000;
 
-export const BUNDLE_VERSION = 1;
-export const BUNDLE_TYPE = 'verify.bundle.run';
+// ---------------------------------------------------------------------------
+// Schema types
+// ---------------------------------------------------------------------------
 
-export interface VerificationBundleV1 {
-  version: 1;
-  type: 'verify.bundle.run';
+export interface BundleVerifiedEntry {
+  txId: string;
+  level: 1 | 2 | 3;
+  dataSha256: string | null;
+  owner: string | null;
+  blockHeight: number | null;
+  blockTimestamp: string | null;
+  signatureType: number | null;
+  isBundled: boolean;
+  bundleRootTxId: string | null;
+  recovery: VerificationResult['recovery'];
+  verificationId: string | null;
+}
+
+export interface BundleFailedEntry {
+  txId: string;
+  outcome: 'unavailable' | 'tampered';
+  failureReason: string | null;
+  verificationId: string | null;
+}
+
+export interface VerificationBundleV2 {
+  $schema: string;
+  '@context': string;
+  type: typeof BUNDLE_TYPE;
+  version: typeof BUNDLE_VERSION;
+
+  id: string;
   jobId: string;
   runId: string;
   tenantId: string;
-  operator: string | null;
-  operatorPublicKey: string | null;
-  gateway: string | null;
-  startedAt: string;
-  finishedAt: string;
-  input: { type: 'txIds'; ids: string[] };
-  totals: {
-    verified: number;
-    tampered: number;
-    unavailable: number;
-    cacheHit: number;
-    bytesFetched: number;
-    total: number;
+
+  issuer: {
+    operator: string | null;
+    operatorPublicKey: string | null;
+    gateway: {
+      host: string | null;
+      url: string | null;
+      softwareVersion: string;
+    };
+    trustAnchor: 'self-asserted-arweave-wallet';
+    independence: 'third-party-from-data-owner';
   };
-  deltas: {
-    verified: number;
-    tampered: number;
-    unavailable: number;
-  } | null;
-  failures: Array<{
-    txId: string;
-    outcome: string;
-    failureReason: string | null;
-    verificationId: string | null;
-  }>;
-  failuresTruncated: boolean;
+
+  subject: {
+    input: { type: 'txIds'; ids: string[] };
+    network: 'arweave-mainnet';
+    totalCount: number;
+  };
+
+  methodology: {
+    checks: string[];
+    signatureAlgorithms: string[];
+    deepHashSpec: string;
+    canonicalization: 'RFC8785';
+    assuranceLevel: 'cryptographic-proof';
+    knownLimitations: string[];
+    referenceVerifier: string;
+  };
+
+  results: {
+    verified: BundleVerifiedEntry[];
+    failed: BundleFailedEntry[];
+    verifiedTruncated: boolean;
+    failuresTruncated: boolean;
+    txMerkleRoot: string;
+    totals: {
+      verified: number;
+      tampered: number;
+      unavailable: number;
+      cacheHit: number;
+      bytesFetched: number;
+      total: number;
+    };
+  };
+
+  validity: {
+    producedAt: string;
+    validFrom: string;
+    validUntil: string;
+    retentionPolicy: string;
+    timeSource: 'system-clock';
+  };
+
+  humanReadable: {
+    summary: string;
+    limitations: string;
+    howToReverify: string;
+  };
+
+  conformance: string[];
+
   payloadHash: string;
+  signatureAlgorithm: typeof SIGNATURE_ALGORITHM;
   signature: string | null;
 }
 
-/**
- * Build a signed verification bundle for a completed run.
- *
- * The bundle is the primary verifiable artifact — machine-verifiable offline
- * using only the operator's public key. Verifiers reconstruct the canonical
- * JSON of the bundle minus the `signature` field, then verify RSA-PSS-SHA256
- * against the operator's public key.
- *
- * Returns null if the job or run can't be found.
- */
-export function buildBundle(jobId: string, runId: string): VerificationBundleV1 | null {
+// ---------------------------------------------------------------------------
+// Builder
+// ---------------------------------------------------------------------------
+
+export function buildBundle(jobId: string, runId: string): VerificationBundleV2 | null {
   const job = jobs.findJobById(jobId);
   const run = jobs.getRun(runId);
   if (!job || !run) return null;
 
-  const failures = jobs.listFailuresForRun(runId, FAILURE_CAP + 1);
-  const truncated = failures.length > FAILURE_CAP;
-  const cappedFailures = truncated ? failures.slice(0, FAILURE_CAP) : failures;
+  const verifiedRows = jobs.listVerifiedForRun(run.id, ENTRY_CAP + 1);
+  const verifiedTruncated = verifiedRows.length > ENTRY_CAP;
+  const failureRows = jobs.listFailuresForRun(run.id, ENTRY_CAP + 1);
+  const failuresTruncated = failureRows.length > ENTRY_CAP;
 
-  // Deltas vs the previous completed run (post-MVP, when scheduled jobs land).
-  // Leave null on initial implementation to keep the bundle schema stable.
-  const deltas: VerificationBundleV1['deltas'] = null;
+  const verified: BundleVerifiedEntry[] = [];
+  for (const row of verifiedRows.slice(0, ENTRY_CAP)) {
+    if (!row.resultJson) {
+      logger.warn(
+        { runId: run.id, txId: row.txId },
+        'Verified row missing cached VerificationResult — skipping from bundle'
+      );
+      continue;
+    }
+    try {
+      const r = JSON.parse(row.resultJson) as VerificationResult;
+      verified.push(projectVerified(r, row.verificationId));
+    } catch (err) {
+      logger.warn(
+        { err, runId: run.id, txId: row.txId },
+        'Failed to parse cached VerificationResult — skipping from bundle'
+      );
+    }
+  }
 
-  const bundle: VerificationBundleV1 = {
-    version: 1,
+  const failed: BundleFailedEntry[] = failureRows.slice(0, ENTRY_CAP).map((f) => ({
+    txId: f.txId,
+    outcome: f.outcome as 'unavailable' | 'tampered',
+    failureReason: f.failureReason,
+    verificationId: f.verificationId,
+  }));
+
+  // `producedAt` is sourced from the run's finishedAt (or startedAt if the
+  // run is still in flight) so rebuilding the bundle for the same run is
+  // byte-identical — critical for signature stability and for verifiers that
+  // re-canonicalize on receive.
+  const producedAtMs = run.finishedAt ?? run.startedAt ?? Date.now();
+  const producedAt = new Date(producedAtMs);
+  // Defensive default so tests that mock config without
+  // BUNDLE_RETENTION_MONTHS still build a valid bundle.
+  const retentionMonths = config.BUNDLE_RETENTION_MONTHS ?? 6;
+  const validUntil = new Date(producedAt);
+  validUntil.setMonth(validUntil.getMonth() + retentionMonths);
+
+  // Merkle root binds every enumerated per-tx entry to a single hash inside
+  // the signed payload, so a third party can prove inclusion of any single
+  // tx without holding the entire bundle. Verifieds first, then faileds,
+  // each canonicalised individually (RFC 8785) then SHA-256'd as a leaf.
+  const merkleLeaves: string[] = [];
+  for (const v of verified)
+    merkleLeaves.push(canonicalize(v as unknown as Record<string, unknown>));
+  for (const f of failed) merkleLeaves.push(canonicalize(f as unknown as Record<string, unknown>));
+  const txMerkleRoot = merkleRootFromCanonicalEntries(merkleLeaves);
+
+  const verifiedCount = run.verifiedCount;
+  const totalCount = job.totalCount;
+  const summary = humanReadableSummary({
+    verified: verifiedCount,
+    total: totalCount,
+    tampered: run.failedCount,
+    unavailable: run.unavailableCount,
+  });
+
+  const bundle: VerificationBundleV2 = {
+    $schema: BUNDLE_SCHEMA_URL,
+    '@context': BUNDLE_CONTEXT_URL,
     type: BUNDLE_TYPE,
+    version: BUNDLE_VERSION,
+
+    id: `urn:ar-io-verify:${job.id}:${run.id}`,
     jobId: job.id,
     runId: run.id,
     tenantId: job.tenantId,
-    operator: getOperatorAddress(),
-    operatorPublicKey: getOperatorPublicKey(),
-    gateway: config.GATEWAY_HOST || null,
-    startedAt: new Date(run.startedAt).toISOString(),
-    finishedAt: new Date(run.finishedAt ?? Date.now()).toISOString(),
-    input: { type: 'txIds', ids: job.inputSpec.ids },
-    totals: {
-      verified: run.verifiedCount,
-      tampered: run.failedCount,
-      unavailable: run.unavailableCount,
-      cacheHit: run.cacheHitCount,
-      bytesFetched: run.bytesFetched,
-      total: job.totalCount,
+
+    issuer: {
+      operator: getOperatorAddress(),
+      operatorPublicKey: getOperatorPublicKey(),
+      gateway: {
+        host: config.GATEWAY_HOST || null,
+        url: config.GATEWAY_URL || null,
+        softwareVersion: SERVER_VERSION,
+      },
+      trustAnchor: 'self-asserted-arweave-wallet',
+      independence: 'third-party-from-data-owner',
     },
-    deltas,
-    failures: cappedFailures.map((f) => ({
-      txId: f.txId,
-      outcome: f.outcome,
-      failureReason: f.failureReason,
-      verificationId: f.verificationId,
-    })),
-    failuresTruncated: truncated,
+
+    subject: {
+      input: { type: 'txIds', ids: job.inputSpec.ids },
+      network: 'arweave-mainnet',
+      totalCount,
+    },
+
+    methodology: {
+      checks: ['existence', 'data_hash_sha256', 'signature_deep_hash'],
+      signatureAlgorithms: ['RSA-PSS-SHA256', 'Ed25519', 'ECDSA-secp256k1'],
+      deepHashSpec: 'ANS-104',
+      canonicalization: 'RFC8785',
+      assuranceLevel: 'cryptographic-proof',
+      knownLimitations: [
+        'Ethereum ECDSA (signature type 3) may not verify all signer implementations.',
+        'L1/L2 detection reflects the serving gateway’s view, not absolute on-chain state.',
+        'unavailable outcomes are not cached — re-runs retry, not replay the last failure.',
+      ],
+      referenceVerifier: REFERENCE_VERIFIER_URL,
+    },
+
+    results: {
+      verified,
+      failed,
+      verifiedTruncated,
+      failuresTruncated,
+      txMerkleRoot,
+      totals: {
+        verified: run.verifiedCount,
+        tampered: run.failedCount,
+        unavailable: run.unavailableCount,
+        cacheHit: run.cacheHitCount,
+        bytesFetched: run.bytesFetched,
+        total: totalCount,
+      },
+    },
+
+    validity: {
+      producedAt: producedAt.toISOString(),
+      validFrom: producedAt.toISOString(),
+      validUntil: validUntil.toISOString(),
+      retentionPolicy: `P${retentionMonths}M`,
+      timeSource: 'system-clock',
+    },
+
+    humanReadable: {
+      summary,
+      limitations:
+        'This report makes no claim about the meaning, legality, or fitness-for-purpose ' +
+        'of the verified data — only its cryptographic integrity and the on-chain ' +
+        'existence of the transactions listed in `subject.input.ids`. No verification ' +
+        'beyond `methodology.checks` was performed. The `signedAt`/`producedAt` timestamps ' +
+        'are taken from the operator’s system clock and are not anchored to a trusted ' +
+        'timestamp authority — operator-clock backdating is not defended against by this ' +
+        'bundle version.',
+      howToReverify:
+        'Run: `npx @ar-io/verifier-cli reverify <this-bundle.json>` — or follow the ' +
+        'recipe in `docs/COMPLIANCE.md`. The verifier needs only this JSON and Node ≥18.',
+    },
+
+    conformance: [
+      'eu-ai-act-art-10-12-13-19-aligned',
+      'vc-2.0-structural',
+      'c2pa-2.x-aligned',
+      'rfc-8785-canonical-json',
+    ],
+
     payloadHash: '',
+    signatureAlgorithm: SIGNATURE_ALGORITHM,
     signature: null,
   };
 
-  // Compute payloadHash + signature over the canonical bundle minus those two
-  // fields (otherwise we'd be hashing/signing a chicken-and-egg).
+  // Compute payloadHash + signature over the canonical bundle minus the
+  // two fields they themselves carry (chicken-and-egg).
   const { payloadHash: _ph, signature: _sig, ...unsigned } = bundle;
   const canonical = canonicalize(unsigned as unknown as Record<string, unknown>);
   bundle.payloadHash = sha256B64Url(Buffer.from(canonical));
@@ -124,9 +310,84 @@ export function buildBundle(jobId: string, runId: string): VerificationBundleV1 
 }
 
 /**
- * Serialize a bundle to its canonical-JSON form (sorted keys recursively, no
- * whitespace). This is what gets stored and what verifiers should reconstruct.
+ * Serialize a bundle to its canonical-JSON form (RFC 8785). This is what
+ * gets stored and what verifiers should reconstruct.
  */
-export function bundleToCanonicalJson(bundle: VerificationBundleV1): string {
+export function bundleToCanonicalJson(bundle: VerificationBundleV2): string {
   return canonicalize(bundle as unknown as Record<string, unknown>);
+}
+
+// ---------------------------------------------------------------------------
+// Projection + helpers
+// ---------------------------------------------------------------------------
+
+function projectVerified(
+  r: VerificationResult,
+  verificationId: string | null
+): BundleVerifiedEntry {
+  return {
+    txId: r.txId,
+    level: r.level,
+    dataSha256: r.authenticity.dataHash,
+    owner: r.owner.address,
+    blockHeight: r.existence.blockHeight,
+    blockTimestamp: r.existence.blockTimestamp,
+    signatureType: extractSignatureType(r),
+    isBundled: r.bundle.isBundled,
+    bundleRootTxId: r.bundle.rootTransactionId,
+    recovery: r.recovery,
+    verificationId,
+  };
+}
+
+/**
+ * The numeric ANS-104 signature type that produced this proof. Stored in
+ * `authenticity.signatureSkipReason` only when verification was *skipped*,
+ * so we infer from the verification path that actually succeeded.
+ *
+ * For L1 native txs there is no ANS-104 sig type — return null.
+ */
+function extractSignatureType(_r: VerificationResult): number | null {
+  // We don't currently persist the chosen sig type on the result; until we
+  // do, return null. Auditors get the algorithm from `methodology.signatureAlgorithms`
+  // and the binding via `dataSha256` + `owner` — sig-type granularity is a
+  // future field.
+  return null;
+}
+
+function humanReadableSummary(t: {
+  verified: number;
+  total: number;
+  tampered: number;
+  unavailable: number;
+}): string {
+  if (t.total === 0) {
+    return 'This bundle attests that the operator ran a verification job with no transactions.';
+  }
+  const pct = ((t.verified / t.total) * 100).toFixed(0);
+  const parts = [
+    `This report attests that ${t.verified} of ${t.total} transactions (${pct}%) were ` +
+      'cryptographically verified as untampered, with valid signatures bound to their stated ' +
+      'owners on the Arweave blockweave.',
+  ];
+  if (t.tampered > 0) {
+    parts.push(
+      `${t.tampered} transaction(s) were observed as TAMPERED — the data served did not match ` +
+        'the on-chain signature. These represent integrity violations and are listed in ' +
+        '`results.failed`.'
+    );
+  }
+  if (t.unavailable > 0) {
+    parts.push(
+      `${t.unavailable} transaction(s) could not be retrieved from the serving gateway and ` +
+        'were not verified. `results.failed[].failureReason` carries the granular cause.'
+    );
+  }
+  parts.push(
+    'Per-tx evidence is enumerated under `results.verified` and `results.failed`, with each ' +
+      'row independently re-derivable from the originating tx. A Merkle root over every ' +
+      'enumerated row is bound to this bundle via `results.txMerkleRoot`, so individual ' +
+      'inclusion can be proven without holding the whole bundle.'
+  );
+  return parts.join(' ');
 }

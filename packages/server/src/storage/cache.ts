@@ -12,22 +12,8 @@ export function initCache(): void {
   // Idempotent — initDb() returns the existing connection if already opened
   // by another store (e.g., the jobs store).
   initDb();
-  const db = getDb();
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS verification_results (
-      id TEXT PRIMARY KEY,
-      tx_id TEXT NOT NULL,
-      result_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_verification_results_tx_id
-    ON verification_results(tx_id)
-  `);
-
+  // The `verification_results` table is created in storage/db.ts:initDb()
+  // so it exists whenever the DB is open — bundle.ts joins against it.
   pruneExpired();
   cleanupTimer = setInterval(pruneExpired, CLEANUP_INTERVAL_MS);
 

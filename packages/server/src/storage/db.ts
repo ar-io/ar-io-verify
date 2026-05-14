@@ -15,6 +15,21 @@ export function initDb(): Database.Database {
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+
+  // Shared schema for the verification cache. Created here (not in cache.ts)
+  // because the jobs store joins against it when building the bundle's
+  // verified-row enumeration, so the table must exist whenever the DB is
+  // open — even in tests that only initialize the jobs store.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS verification_results (
+      id          TEXT PRIMARY KEY,
+      tx_id       TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_verification_results_tx_id ON verification_results(tx_id);
+  `);
+
   logger.info({ path: dbPath }, 'Database connection opened');
   return db;
 }
