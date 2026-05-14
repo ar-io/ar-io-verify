@@ -9,7 +9,7 @@
     "dev": "pnpm --filter @ar-io/verify-server run dev",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "test": "pnpm --filter @ar-io/verify-server run test"
+    "test": "pnpm --filter @ar-io/verify-server run test && pnpm --filter @ar-io/verifier-cli run test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
