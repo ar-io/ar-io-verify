@@ -37,6 +37,10 @@ RUN pnpm --filter @ar-io/verify-server run build
 # Copy assets to dist directory (tsup doesn't bundle binary/JSON assets)
 RUN cp -r packages/server/src/attestation/fonts packages/server/dist/fonts 2>/dev/null || true
 RUN cp packages/server/src/openapi.json packages/server/dist/openapi.json 2>/dev/null || true
+# Bundle the JSON Schema published at /schemas/v2/bundle.json
+RUN cp -r packages/server/schemas packages/server/dist/schemas 2>/dev/null || true
+# Bundle package.json for the SERVER_VERSION reader (version.ts)
+RUN cp packages/server/package.json packages/server/dist/package.json 2>/dev/null || true
 
 # Build the frontend
 RUN pnpm --filter verify-web run build

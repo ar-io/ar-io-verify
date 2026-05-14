@@ -17,6 +17,7 @@ import {
   stopStallDetector,
 } from './pipeline/job-worker.js';
 import { initSigning } from './utils/signing.js';
+import { SERVER_VERSION } from './version.js';
 import { requestId } from './middleware/request-id.js';
 import { accessLog } from './middleware/access-log.js';
 import healthRouter from './routes/health.js';
@@ -24,6 +25,7 @@ import verifyRouter from './routes/verify.js';
 import jobsRouter from './routes/jobs.js';
 import metricsRouter from './routes/metrics.js';
 import readyRouter from './routes/ready.js';
+import schemasRouter from './routes/schemas.js';
 
 const app = express();
 
@@ -51,11 +53,12 @@ apiRouter.use('/ready', readyRouter);
 apiRouter.use('/metrics', metricsRouter);
 apiRouter.use('/api/v1/verify', verifyRouter);
 apiRouter.use('/api/v1/jobs', jobsRouter);
+apiRouter.use('/schemas', schemasRouter);
 
 apiRouter.get('/api', (_req, res) => {
   res.json({
     name: 'Verify Sidecar',
-    version: '0.2.0',
+    version: SERVER_VERSION,
     description: 'Verification and attestation service for Arweave transaction data',
     endpoints: {
       health: 'GET /health',

@@ -10,6 +10,42 @@ const timeout = config.GATEWAY_TIMEOUT_MS;
 /** Max bytes to download for verification (100 MB) */
 const MAX_RAW_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 
+/**
+ * Fetch the L1 weave-data offset for a transaction. Returns the size of the
+ * data payload and the END byte offset within the Arweave weave (the byte
+ * range is [offset - size + 1, offset]).
+ *
+ * Surfaced to customers as the canonical Arweave-network-level recovery
+ * pointer — given the weave offset, the data is directly recoverable from
+ * any Arweave peer without going through a gateway.
+ *
+ * For L2 data items, callers should pass the bundle ROOT txId, not the
+ * data item id (Arweave nodes only know about L1 txs).
+ *
+ * Returns null on 404 or transient errors — the bundle is still useful
+ * without this field; treat it as best-effort.
+ */
+export async function getDataOffset(
+  txId: string
+): Promise<{ size: number; offset: number } | null> {
+  try {
+    const res = await withGatewayBudget(() =>
+      fetchWithTimeout(`${baseUrl}/tx/${txId}/offset`, timeout)
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    const body = (await res.json()) as { size?: string; offset?: string };
+    if (typeof body.size !== 'string' || typeof body.offset !== 'string') return null;
+    const size = Number(body.size);
+    const offset = Number(body.offset);
+    if (!Number.isFinite(size) || !Number.isFinite(offset)) return null;
+    return { size, offset };
+  } catch (error) {
+    logger.warn({ error, txId }, 'Failed to fetch /tx/:id/offset');
+    return null;
+  }
+}
+
 export async function getTransaction(txId: string): Promise<GatewayTransaction | null> {
   // No retries — /tx/ routes through Envoy to L1 peers, which return 404 immediately
   // for bundled data items. The pipeline falls back to /raw/ headers + GraphQL.

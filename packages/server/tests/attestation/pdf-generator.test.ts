@@ -21,6 +21,8 @@ function makeResult(overrides: Partial<VerificationResult> = {}): VerificationRe
       dataHash: 'testhash123456789012345678901234567890abc',
       gatewayHash: 'testhash123456789012345678901234567890abc',
       hashMatch: true,
+      signatureType: null,
+      dataRoot: null,
     },
     owner: {
       address: 'testowner12345678901234567890123456789012',
@@ -36,6 +38,7 @@ function makeResult(overrides: Partial<VerificationResult> = {}): VerificationRe
       ],
     },
     bundle: { isBundled: false, rootTransactionId: null },
+    recovery: { arweave: null, dataItem: null },
     gatewayAssessment: { verified: null, stable: null, trusted: true, hops: 1 },
     links: {
       dashboard: '/report/vrf_test',
@@ -67,6 +70,8 @@ describe('PDF Generator', () => {
           dataHash: null,
           gatewayHash: null,
           hashMatch: null,
+          signatureType: null,
+          dataRoot: null,
         },
       })
     );

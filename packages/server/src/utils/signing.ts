@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { config } from '../config.js';
 import { logger } from './logger.js';
 import { base64UrlToBuffer, bufferToBase64Url, sha256B64Url } from './crypto.js';
+import { canonicalize as jcsCanonicalize } from './canonical.js';
 import type { VerificationResult } from '../types.js';
 
 interface JWK {
@@ -101,31 +102,14 @@ export function buildAttestationPayload(
 }
 
 /**
- * Canonicalize a payload to deterministic JSON (sorted keys, no whitespace).
+ * Canonicalize a payload to deterministic JSON per RFC 8785 (JCS).
  *
- * Uses deep recursive sorting so nested objects also serialize identically
- * across implementations. For flat single-level payloads (the existing per-tx
- * attestation) the output matches what `JSON.stringify(obj, Object.keys(obj).sort())`
- * produced before, so previously-signed attestations remain verifiable.
- *
- * Arrays preserve their existing order — array order is semantic, not
- * incidental. Strings, numbers, booleans, null pass through JSON.stringify
- * verbatim.
+ * Re-exported here for backward import compatibility; the implementation
+ * lives in utils/canonical.ts so it can be reused dependency-free by the
+ * reference verifier CLI.
  */
 export function canonicalize(payload: Record<string, unknown>): string {
-  return canonicalizeValue(payload);
-}
-
-function canonicalizeValue(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return '[' + value.map(canonicalizeValue).join(',') + ']';
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalizeValue(obj[k])).join(',') + '}';
+  return jcsCanonicalize(payload);
 }
 
 /**

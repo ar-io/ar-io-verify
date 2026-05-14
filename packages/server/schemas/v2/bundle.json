@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verify.ar.io/schemas/v2/bundle.json",
+  "title": "ar.io Verification Bundle V2",
+  "description": "Machine-verifiable, operator-signed artifact attesting the outcome of a verification run over a set of Arweave transactions. See packages/server/src/pipeline/bundle.ts for the canonical implementation, and packages/verifier-cli for a reference offline verifier.",
+  "type": "object",
+  "required": [
+    "$schema",
+    "@context",
+    "type",
+    "version",
+    "id",
+    "jobId",
+    "runId",
+    "tenantId",
+    "issuer",
+    "subject",
+    "methodology",
+    "results",
+    "validity",
+    "humanReadable",
+    "conformance",
+    "payloadHash",
+    "signatureAlgorithm",
+    "signature"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri" },
+    "@context": { "type": "string", "format": "uri" },
+    "type": { "const": "VerificationBundle" },
+    "version": { "const": 2 },
+    "id": { "type": "string", "pattern": "^urn:ar-io-verify:" },
+    "jobId": { "type": "string" },
+    "runId": { "type": "string" },
+    "tenantId": { "type": "string" },
+
+    "issuer": {
+      "type": "object",
+      "required": ["gateway", "trustAnchor", "independence"],
+      "properties": {
+        "operator": { "type": ["string", "null"] },
+        "operatorPublicKey": { "type": ["string", "null"] },
+        "gateway": {
+          "type": "object",
+          "required": ["softwareVersion"],
+          "properties": {
+            "host": { "type": ["string", "null"] },
+            "url": { "type": ["string", "null"] },
+            "softwareVersion": { "type": "string" }
+          }
+        },
+        "trustAnchor": { "type": "string" },
+        "independence": { "type": "string" }
+      }
+    },
+
+    "subject": {
+      "type": "object",
+      "required": ["input", "network", "totalCount"],
+      "properties": {
+        "input": {
+          "type": "object",
+          "required": ["type", "ids"],
+          "properties": {
+            "type": { "const": "txIds" },
+            "ids": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "network": { "type": "string" },
+        "totalCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "methodology": {
+      "type": "object",
+      "required": [
+        "checks",
+        "signatureAlgorithms",
+        "deepHashSpec",
+        "canonicalization",
+        "assuranceLevel",
+        "knownLimitations",
+        "referenceVerifier"
+      ],
+      "properties": {
+        "checks": { "type": "array", "items": { "type": "string" } },
+        "signatureAlgorithms": { "type": "array", "items": { "type": "string" } },
+        "deepHashSpec": { "type": "string" },
+        "canonicalization": { "const": "RFC8785" },
+        "assuranceLevel": { "const": "cryptographic-proof" },
+        "knownLimitations": { "type": "array", "items": { "type": "string" } },
+        "referenceVerifier": { "type": "string", "format": "uri" }
+      }
+    },
+
+    "results": {
+      "type": "object",
+      "required": [
+        "verified",
+        "failed",
+        "verifiedTruncated",
+        "failuresTruncated",
+        "txMerkleRoot",
+        "totals"
+      ],
+      "properties": {
+        "verified": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["txId", "level", "isBundled", "recovery"],
+            "properties": {
+              "txId": { "type": "string" },
+              "level": { "type": "integer", "minimum": 1, "maximum": 3 },
+              "dataSha256": { "type": ["string", "null"] },
+              "dataRoot": { "type": ["string", "null"] },
+              "signatureType": {
+                "type": ["string", "null"],
+                "enum": [
+                  "arweave-tx-rsa-pss",
+                  "ans104-rsa-pss",
+                  "ans104-ed25519",
+                  "ans104-ecdsa",
+                  null
+                ]
+              },
+              "owner": { "type": ["string", "null"] },
+              "blockHeight": { "type": ["integer", "null"] },
+              "blockTimestamp": { "type": ["string", "null"] },
+              "isBundled": { "type": "boolean" },
+              "bundleRootTxId": { "type": ["string", "null"] },
+              "recovery": { "$ref": "#/$defs/recovery" },
+              "verificationId": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["txId", "outcome"],
+            "properties": {
+              "txId": { "type": "string" },
+              "outcome": { "enum": ["tampered", "unavailable"] },
+              "failureReason": { "type": ["string", "null"] },
+              "verificationId": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "verifiedTruncated": { "type": "boolean" },
+        "failuresTruncated": { "type": "boolean" },
+        "txMerkleRoot": { "type": "string" },
+        "totals": {
+          "type": "object",
+          "required": ["verified", "tampered", "unavailable", "total"],
+          "properties": {
+            "verified": { "type": "integer", "minimum": 0 },
+            "tampered": { "type": "integer", "minimum": 0 },
+            "unavailable": { "type": "integer", "minimum": 0 },
+            "cacheHit": { "type": "integer", "minimum": 0 },
+            "bytesFetched": { "type": "integer", "minimum": 0 },
+            "total": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+
+    "validity": {
+      "type": "object",
+      "required": ["producedAt", "validFrom", "validUntil", "retentionPolicy", "timeSource"],
+      "properties": {
+        "producedAt": { "type": "string", "format": "date-time" },
+        "validFrom": { "type": "string", "format": "date-time" },
+        "validUntil": { "type": "string", "format": "date-time" },
+        "retentionPolicy": { "type": "string", "pattern": "^P\\d+[YMD]$" },
+        "timeSource": { "type": "string" }
+      }
+    },
+
+    "humanReadable": {
+      "type": "object",
+      "required": ["summary", "limitations", "howToReverify"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 20 },
+        "limitations": { "type": "string", "minLength": 20 },
+        "howToReverify": { "type": "string", "minLength": 20 }
+      }
+    },
+
+    "conformance": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+
+    "payloadHash": { "type": "string" },
+    "signatureAlgorithm": { "const": "RSA-PSS-SHA256" },
+    "signature": { "type": ["string", "null"] }
+  },
+
+  "$defs": {
+    "recovery": {
+      "type": "object",
+      "required": ["arweave", "dataItem"],
+      "properties": {
+        "arweave": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["txId", "weaveSize", "weaveOffset"],
+              "properties": {
+                "txId": { "type": "string" },
+                "weaveSize": { "type": "integer", "minimum": 0 },
+                "weaveOffset": { "type": "integer", "minimum": 0 }
+              }
+            }
+          ]
+        },
+        "dataItem": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["headerOffset", "dataOffset", "dataSize"],
+              "properties": {
+                "headerOffset": { "type": "integer", "minimum": 0 },
+                "dataOffset": { "type": "integer", "minimum": 0 },
+                "dataSize": { "type": "integer", "minimum": 0 }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

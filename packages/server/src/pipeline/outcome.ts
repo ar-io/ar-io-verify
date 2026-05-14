@@ -45,10 +45,15 @@ export function mapOutcome(result: VerificationResult): OutcomeMapping {
     return { outcome: 'unavailable', failureReason: 'data_too_large' };
   }
   if (skip.includes('Raw data unavailable')) {
-    return { outcome: 'unavailable', failureReason: 'gateway_5xx' };
+    return { outcome: 'unavailable', failureReason: 'raw_data_unavailable' };
   }
-  if (skip.includes('No signature') || skip.includes('Insufficient data')) {
-    return { outcome: 'unavailable', failureReason: 'no_signature' };
+  if (
+    skip.includes('No signature') ||
+    skip.includes('No owner public key') ||
+    skip.includes('Only wallet address') ||
+    skip.includes('Insufficient data')
+  ) {
+    return { outcome: 'unavailable', failureReason: 'gateway_signature_unavailable' };
   }
   return { outcome: 'unavailable', failureReason: 'unknown' };
 }

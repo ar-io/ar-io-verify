@@ -15,6 +15,7 @@ import {
   headRawData,
   getRawData,
   getDataItemHeader,
+  getDataOffset,
   getTransaction,
   getTransactionViaGraphQL,
 } from '../gateway/client.js';
@@ -165,6 +166,15 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
   // Step 4: Signature verification
   const signatureB64 = headers?.signature ?? l1TxData?.signature ?? null;
 
+  // Determine the named algorithm BEFORE attempting — even if verification
+  // is skipped or fails, the algorithm intent is the one the bundle should
+  // report (helpful for triage). Final null/value is set after verification.
+  const intendedSignatureType = pickSignatureType({
+    isL1: !!l1TxData,
+    parsedHeaderSigType: parsedHeader?.signatureType ?? null,
+    headerSigType: headers?.signatureType ?? null,
+  });
+
   const sigResult = await attemptSignatureVerification({
     parsedHeader,
     signatureB64Url: signatureB64,
@@ -210,6 +220,13 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
       dataHash: independentHash,
       gatewayHash,
       hashMatch,
+      // The algorithm intent is reported regardless of skip/pass — the
+      // auditor needs to know which signer path applied to this tx, even
+      // when verification was skipped (helpful for triage).
+      signatureType: intendedSignatureType,
+      // dataRoot is meaningful only for L1 format-2 (and is the on-chain
+      // binding to the data even when raw bytes weren't downloaded).
+      dataRoot: l1TxData?.format === 2 ? l1TxData.dataRoot : null,
     },
     owner: {
       address: ownerAddress,
@@ -221,6 +238,15 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
       isBundled,
       rootTransactionId: isBundled ? (headers?.rootTransactionId ?? null) : null,
     },
+    recovery: buildRecovery({
+      txId,
+      isBundled,
+      rootTransactionId: headers?.rootTransactionId ?? null,
+      dataItemOffset: headers?.dataItemOffset ?? null,
+      dataItemDataOffset: headers?.dataItemDataOffset ?? null,
+      dataSize,
+      arweaveOffset: await fetchArweaveOffset(txId, isBundled, headers?.rootTransactionId ?? null),
+    }),
     gatewayAssessment,
     attestation: null,
     links: {
@@ -425,6 +451,89 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// Signature type naming
+// ---------------------------------------------------------------------------
+
+/**
+ * Pick the named algorithm string the bundle should report for this tx.
+ *
+ *   L1 native Arweave tx     → always "arweave-tx-rsa-pss"
+ *   L2 ANS-104 data item     → mapped from the numeric sig type (1/2/3)
+ *
+ * Returns null only when we have NO signal at all about the algorithm.
+ */
+function pickSignatureType(input: {
+  isL1: boolean;
+  parsedHeaderSigType: number | null;
+  headerSigType: number | null;
+}): VerificationResult['authenticity']['signatureType'] {
+  if (input.isL1) return 'arweave-tx-rsa-pss';
+  const t = input.parsedHeaderSigType ?? input.headerSigType;
+  if (t === 1) return 'ans104-rsa-pss';
+  if (t === 2) return 'ans104-ed25519';
+  if (t === 3) return 'ans104-ecdsa';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Recovery pointers
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the L1 weave offset for the target transaction (or its parent
+ * bundle, for L2 data items). Best-effort — null on any failure since the
+ * bundle is still useful without it.
+ */
+async function fetchArweaveOffset(
+  txId: string,
+  isBundled: boolean,
+  rootTransactionId: string | null
+): Promise<{ txId: string; size: number; offset: number } | null> {
+  const targetTxId = isBundled && rootTransactionId ? rootTransactionId : txId;
+  const off = await getDataOffset(targetTxId);
+  if (!off) return null;
+  return { txId: targetTxId, size: off.size, offset: off.offset };
+}
+
+interface BuildRecoveryInput {
+  txId: string;
+  isBundled: boolean;
+  rootTransactionId: string | null;
+  dataItemOffset: number | null;
+  dataItemDataOffset: number | null;
+  dataSize: number | null;
+  arweaveOffset: { txId: string; size: number; offset: number } | null;
+}
+
+function buildRecovery(input: BuildRecoveryInput): VerificationResult['recovery'] {
+  const { isBundled, dataItemOffset, dataItemDataOffset, dataSize, arweaveOffset } = input;
+
+  const arweave = arweaveOffset
+    ? {
+        txId: arweaveOffset.txId,
+        weaveSize: arweaveOffset.size,
+        weaveOffset: arweaveOffset.offset,
+      }
+    : null;
+
+  // Data item offsets are only meaningful for bundled items, and only when
+  // both pointers come back from the gateway. dataSize falls back to 0
+  // when content-length wasn't on the HEAD response — non-fatal but worth
+  // noting in the bundle since recovery from the bundle requires the byte
+  // range.
+  const dataItem =
+    isBundled && dataItemOffset !== null && dataItemDataOffset !== null
+      ? {
+          headerOffset: dataItemOffset,
+          dataOffset: dataItemDataOffset,
+          dataSize: dataSize ?? 0,
+        }
+      : null;
+
+  return { arweave, dataItem };
+}
+
+// ---------------------------------------------------------------------------
 // Not-found result
 // ---------------------------------------------------------------------------
 
@@ -451,10 +560,13 @@ function buildNotFoundResult(
       dataHash: null,
       gatewayHash: null,
       hashMatch: null,
+      signatureType: null,
+      dataRoot: null,
     },
     owner: { address: null, publicKey: null, addressVerified: null },
     metadata: { dataSize: null, contentType: null, tags: [] },
     bundle: { isBundled: false, rootTransactionId: null },
+    recovery: { arweave: null, dataItem: null },
     gatewayAssessment: { verified: null, stable: null, trusted: null, hops: null },
     attestation: null,
     links: { dashboard: null, pdf: null, rawData: null },

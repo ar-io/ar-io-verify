@@ -1,0 +1,24 @@
+{
+  "name": "@ar-io/verifier-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference offline verifier for ar.io Verify VerificationBundle V2 artifacts.",
+  "main": "src/index.ts",
+  "bin": {
+    "ar-io-verifier": "bin/reverify.mjs",
+    "verifier-cli": "bin/reverify.mjs"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "reverify": "node bin/reverify.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^3.0.0"
+  }
+}

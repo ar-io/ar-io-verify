@@ -53,6 +53,14 @@ const envSchema = z.object({
     .int()
     .positive()
     .default(30 * 1000),
+
+  // Number of months a verification bundle is asserted as valid. Default 6
+  // months matches the EU AI Act Article 19 retention floor for high-risk AI
+  // system logs. Surfaced on the bundle as `validity.validUntil` /
+  // `validity.retentionPolicy`. Verifiers should consider bundles past
+  // validUntil as expired for audit purposes (the signature itself remains
+  // cryptographically valid forever).
+  BUNDLE_RETENTION_MONTHS: z.coerce.number().int().positive().default(6),
 });
 
 export type Config = z.infer<typeof envSchema>;
