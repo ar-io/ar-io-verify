@@ -3,7 +3,7 @@
   "info": {
     "title": "ar.io Verify API",
     "description": "Cryptographic data verification and attestation for Arweave via ar.io gateways. Proves existence, authenticity, and authorship of any Arweave transaction including ANS-104 bundled data items.",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "contact": {
       "name": "ar.io",
       "url": "https://ar.io"

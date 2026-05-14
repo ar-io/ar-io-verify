@@ -17,6 +17,7 @@ import {
   stopStallDetector,
 } from './pipeline/job-worker.js';
 import { initSigning } from './utils/signing.js';
+import { SERVER_VERSION } from './version.js';
 import { requestId } from './middleware/request-id.js';
 import { accessLog } from './middleware/access-log.js';
 import healthRouter from './routes/health.js';
@@ -57,7 +58,7 @@ apiRouter.use('/schemas', schemasRouter);
 apiRouter.get('/api', (_req, res) => {
   res.json({
     name: 'Verify Sidecar',
-    version: '0.2.0',
+    version: SERVER_VERSION,
     description: 'Verification and attestation service for Arweave transaction data',
     endpoints: {
       health: 'GET /health',
