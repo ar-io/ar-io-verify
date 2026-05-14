@@ -144,6 +144,7 @@ describe('Signing Module', () => {
       owner: { address: 'testowner', publicKey: null, addressVerified: true },
       metadata: { dataSize: 500, contentType: 'image/png', tags: [] },
       bundle: { isBundled: false, rootTransactionId: null },
+      recovery: { arweave: null, dataItem: null },
       gatewayAssessment: { verified: null, stable: null, trusted: true, hops: 1 },
       attestation: null,
       links: { dashboard: null, pdf: null, rawData: null },

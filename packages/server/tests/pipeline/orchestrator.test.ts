@@ -25,6 +25,7 @@ vi.mock('../../src/utils/logger.js', () => ({
 const mockHeadRawData = vi.fn();
 const mockGetRawData = vi.fn();
 const mockGetDataItemHeader = vi.fn();
+const mockGetDataOffset = vi.fn();
 const mockGetTransaction = vi.fn();
 const mockGetTransactionViaGraphQL = vi.fn();
 
@@ -32,6 +33,7 @@ vi.mock('../../src/gateway/client.js', () => ({
   headRawData: (...args: unknown[]) => mockHeadRawData(...args),
   getRawData: (...args: unknown[]) => mockGetRawData(...args),
   getDataItemHeader: (...args: unknown[]) => mockGetDataItemHeader(...args),
+  getDataOffset: (...args: unknown[]) => mockGetDataOffset(...args),
   getTransaction: (...args: unknown[]) => mockGetTransaction(...args),
   getTransactionViaGraphQL: (...args: unknown[]) => mockGetTransactionViaGraphQL(...args),
 }));
@@ -45,6 +47,7 @@ describe('Orchestrator', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetDataItemHeader.mockResolvedValue(null);
+    mockGetDataOffset.mockResolvedValue(null);
     mockGetTransaction.mockResolvedValue(null);
   });
 

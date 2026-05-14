@@ -37,6 +37,7 @@ function makeResult(txId: string): VerificationResult {
     owner: { address: 'addr', publicKey: null, addressVerified: true },
     metadata: { dataSize: 100, contentType: null, tags: [] },
     bundle: { isBundled: false, rootTransactionId: null },
+    recovery: { arweave: null, dataItem: null },
     gatewayAssessment: { verified: null, stable: null, trusted: null, hops: null },
     attestation: null,
     links: { dashboard: null, pdf: null, rawData: null },

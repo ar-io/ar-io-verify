@@ -15,6 +15,7 @@ import {
   headRawData,
   getRawData,
   getDataItemHeader,
+  getDataOffset,
   getTransaction,
   getTransactionViaGraphQL,
 } from '../gateway/client.js';
@@ -221,6 +222,15 @@ export async function runVerification(request: VerifyRequest): Promise<Verificat
       isBundled,
       rootTransactionId: isBundled ? (headers?.rootTransactionId ?? null) : null,
     },
+    recovery: buildRecovery({
+      txId,
+      isBundled,
+      rootTransactionId: headers?.rootTransactionId ?? null,
+      dataItemOffset: headers?.dataItemOffset ?? null,
+      dataItemDataOffset: headers?.dataItemDataOffset ?? null,
+      dataSize,
+      arweaveOffset: await fetchArweaveOffset(txId, isBundled, headers?.rootTransactionId ?? null),
+    }),
     gatewayAssessment,
     attestation: null,
     links: {
@@ -425,6 +435,64 @@ async function attemptSignatureVerification(input: SigVerifyInput): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// Recovery pointers
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the L1 weave offset for the target transaction (or its parent
+ * bundle, for L2 data items). Best-effort — null on any failure since the
+ * bundle is still useful without it.
+ */
+async function fetchArweaveOffset(
+  txId: string,
+  isBundled: boolean,
+  rootTransactionId: string | null
+): Promise<{ txId: string; size: number; offset: number } | null> {
+  const targetTxId = isBundled && rootTransactionId ? rootTransactionId : txId;
+  const off = await getDataOffset(targetTxId);
+  if (!off) return null;
+  return { txId: targetTxId, size: off.size, offset: off.offset };
+}
+
+interface BuildRecoveryInput {
+  txId: string;
+  isBundled: boolean;
+  rootTransactionId: string | null;
+  dataItemOffset: number | null;
+  dataItemDataOffset: number | null;
+  dataSize: number | null;
+  arweaveOffset: { txId: string; size: number; offset: number } | null;
+}
+
+function buildRecovery(input: BuildRecoveryInput): VerificationResult['recovery'] {
+  const { isBundled, dataItemOffset, dataItemDataOffset, dataSize, arweaveOffset } = input;
+
+  const arweave = arweaveOffset
+    ? {
+        txId: arweaveOffset.txId,
+        weaveSize: arweaveOffset.size,
+        weaveOffset: arweaveOffset.offset,
+      }
+    : null;
+
+  // Data item offsets are only meaningful for bundled items, and only when
+  // both pointers come back from the gateway. dataSize falls back to 0
+  // when content-length wasn't on the HEAD response — non-fatal but worth
+  // noting in the bundle since recovery from the bundle requires the byte
+  // range.
+  const dataItem =
+    isBundled && dataItemOffset !== null && dataItemDataOffset !== null
+      ? {
+          headerOffset: dataItemOffset,
+          dataOffset: dataItemDataOffset,
+          dataSize: dataSize ?? 0,
+        }
+      : null;
+
+  return { arweave, dataItem };
+}
+
+// ---------------------------------------------------------------------------
 // Not-found result
 // ---------------------------------------------------------------------------
 
@@ -455,6 +523,7 @@ function buildNotFoundResult(
     owner: { address: null, publicKey: null, addressVerified: null },
     metadata: { dataSize: null, contentType: null, tags: [] },
     bundle: { isBundled: false, rootTransactionId: null },
+    recovery: { arweave: null, dataItem: null },
     gatewayAssessment: { verified: null, stable: null, trusted: null, hops: null },
     attestation: null,
     links: { dashboard: null, pdf: null, rawData: null },

@@ -168,4 +168,30 @@ describe('Gateway Client', () => {
     const { checkGatewayHealth } = await import('../../src/gateway/client.js');
     expect(await checkGatewayHealth()).toBe(false);
   });
+
+  it('getDataOffset parses size + offset from /tx/:id/offset', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ size: '12345', offset: '99887766554433' }), {
+        status: 200,
+      })) as typeof fetch;
+
+    const { getDataOffset } = await import('../../src/gateway/client.js');
+    const off = await getDataOffset('some-tx');
+    expect(off).toEqual({ size: 12345, offset: 99887766554433 });
+  });
+
+  it('getDataOffset returns null on 404', async () => {
+    globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof fetch;
+
+    const { getDataOffset } = await import('../../src/gateway/client.js');
+    expect(await getDataOffset('missing-tx')).toBeNull();
+  });
+
+  it('getDataOffset returns null on malformed body', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ size: 100 }), { status: 200 })) as typeof fetch;
+
+    const { getDataOffset } = await import('../../src/gateway/client.js');
+    expect(await getDataOffset('weird-tx')).toBeNull();
+  });
 });

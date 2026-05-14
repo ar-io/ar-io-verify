@@ -36,6 +36,7 @@ function makeResult(overrides: Partial<VerificationResult> = {}): VerificationRe
       ],
     },
     bundle: { isBundled: false, rootTransactionId: null },
+    recovery: { arweave: null, dataItem: null },
     gatewayAssessment: { verified: null, stable: null, trusted: true, hops: 1 },
     links: {
       dashboard: '/report/vrf_test',

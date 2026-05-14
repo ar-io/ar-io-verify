@@ -52,6 +52,36 @@ export interface VerificationResult {
     rootTransactionId: string | null;
   };
 
+  /**
+   * Recovery pointers — where this data sits on Arweave such that a
+   * customer can re-fetch it directly from the network (not via verify or
+   * a specific gateway) and re-verify offline.
+   *
+   * For L1 native data: `arweave.txId === txId`; `dataItem` is null.
+   * For L2 data items:  `arweave.txId === bundle root tx`; `dataItem`
+   *   carries the byte offsets within the bundle binary.
+   */
+  recovery: {
+    /** L1 weave-level location of the data (or its parent bundle). */
+    arweave: {
+      /** The L1 tx whose offset is reported (== txId for L1, == bundle root for L2). */
+      txId: string;
+      /** Total bytes of the L1 data payload. */
+      weaveSize: number;
+      /** End byte offset within the weave; range is [offset - size + 1, offset]. */
+      weaveOffset: number;
+    } | null;
+    /** ANS-104 data item offsets within the parent bundle binary. */
+    dataItem: {
+      /** Byte offset of the data item HEADER start within the bundle. */
+      headerOffset: number;
+      /** Byte offset where the data item's DATA payload starts within the bundle. */
+      dataOffset: number;
+      /** Bytes of the data item's data payload. */
+      dataSize: number;
+    } | null;
+  };
+
   /** Gateway's own trust assessment from response headers */
   gatewayAssessment: {
     verified: boolean | null;
