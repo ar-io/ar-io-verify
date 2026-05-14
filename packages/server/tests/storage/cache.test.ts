@@ -84,4 +84,22 @@ describeIfAvailable('Cache', () => {
     const results = cacheModule!.getResultsByTxId(txId);
     expect(results.length).toBe(2);
   });
+
+  it('persists non-permanent (unverified) outcomes for single-tx PDF retrieval', () => {
+    const txId = 'tx3_padded_to_43_chars_12345678901234567';
+    const unverified = makeResult('vrf_unverified', txId);
+    unverified.level = 1;
+    unverified.authenticity.status = 'unverified';
+    unverified.authenticity.signatureValid = null;
+    cacheModule!.saveResult(unverified);
+
+    // Retrievable by id (so the PDF endpoint works for unverified outcomes)
+    const back = cacheModule!.getResultById('vrf_unverified');
+    expect(back).not.toBeNull();
+    expect(back!.authenticity.status).toBe('unverified');
+
+    // BUT the worker's change-detection lookup still skips it — load-bearing.
+    const mostRecent = cacheModule!.getMostRecentPermanentResult(txId);
+    expect(mostRecent).toBeNull();
+  });
 });

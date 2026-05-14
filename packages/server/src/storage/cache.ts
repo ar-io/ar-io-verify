@@ -34,18 +34,22 @@ function pruneExpired(): void {
 }
 
 /**
- * Persist a verification result.
+ * Persist a verification result. ALL outcomes are persisted — including
+ * transient `unavailable` results — so the single-tx PDF endpoint can
+ * render a certificate for every verification attempt, not just successful
+ * ones.
  *
- * Only permanent outcomes (verified / tampered) are cached. Transient failures
- * — gateway timeouts, 5xx, missing binary headers — are NOT persisted, so
- * future re-verifications retry instead of replaying a stale "unavailable"
- * answer. Without this, the cache would suppress exactly the change-detection
- * signal that makes scheduled re-verification valuable. (Task #19)
+ * Change-detection semantics are preserved at READ time, not write time:
+ * the worker's cache lookup goes through `getMostRecentPermanentResult()`
+ * which filters for permanent outcomes only. A stored `unavailable`
+ * therefore never short-circuits a re-verification — it is just retrievable
+ * by its verificationId for as long as the row lives.
+ *
+ * (Prior to V2 the filter was at the write site, which silently 404'd the
+ * PDF endpoint for unverified outcomes — a UX bug. The lookup-time filter
+ * is the load-bearing one for change-detection.)
  */
 export function saveResult(result: VerificationResult): void {
-  if (!isPermanentOutcome(result)) {
-    return;
-  }
   const stmt = getDb().prepare(
     'INSERT OR REPLACE INTO verification_results (id, tx_id, result_json, created_at) VALUES (?, ?, ?, ?)'
   );
@@ -55,8 +59,9 @@ export function saveResult(result: VerificationResult): void {
 /**
  * Get the most recent cached result for a tx that is "usable" — i.e. a
  * permanent outcome safe to reuse without re-verifying. Used by the job
- * worker as its cache lookup. Defense-in-depth: even though saveResult
- * already filters, this filter protects against legacy rows.
+ * worker as its cache lookup. THIS is the load-bearing filter for the
+ * change-detection signal: scheduled re-verifications never replay a
+ * stored `unavailable` because this filter rejects it. (Task #19)
  */
 export function getMostRecentPermanentResult(txId: string): VerificationResult | null {
   const all = getResultsByTxId(txId);
