@@ -66,11 +66,16 @@ describe('Signing Module', () => {
     expect(getOperatorAddress()!.length).toBe(43);
   });
 
-  it('builds a deterministic attestation payload', async () => {
-    const { buildAttestationPayload, canonicalize } = await import('../../src/utils/signing.js');
+  it('builds a deterministic snake_case attestation payload', async () => {
+    const { buildAttestationPayload, canonicalize, ATTESTATION_VERSION } =
+      await import('../../src/utils/signing.js');
+    const rawData = Buffer.from('some attested bytes for data_hash');
+    const dataHashB64 = createHash('sha256').update(rawData).digest('base64url');
+    const dataHashHex = createHash('sha256').update(rawData).digest('hex');
     const mockResult = {
       txId: 'test-tx-id-padded-to-43-characters-1234567',
-      authenticity: { dataHash: 'testhash123', signatureValid: true },
+      level: 3,
+      authenticity: { dataHash: dataHashB64, signatureValid: true },
       existence: { blockHeight: 100, blockTimestamp: '2024-01-01T00:00:00Z' },
       owner: { address: 'testowner123' },
       metadata: { dataSize: 500 },
@@ -79,20 +84,34 @@ describe('Signing Module', () => {
     const p1 = buildAttestationPayload(mockResult, 'test.com');
     const p2 = buildAttestationPayload(mockResult, 'test.com');
 
-    // Payload has required fields
-    expect(p1.txId).toBe('test-tx-id-padded-to-43-characters-1234567');
-    expect(p1.dataHash).toBe('testhash123');
-    expect(p1.signatureVerified).toBe(true);
-    expect(p1.version).toBe(1);
+    // Payload uses family snake_case field names (evidence-export.md §3.1)
+    expect(p1.tx_id).toBe('test-tx-id-padded-to-43-characters-1234567');
+    // data_hash is lowercase hex — the same 32 digest bytes as the base64url
+    // input, transcoded (§3.1); this is what the kernel string-binds.
+    expect(p1.data_hash).toBe(dataHashHex);
+    expect(p1.data_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(p1.data_size).toBe(500);
+    expect(p1.block_height).toBe(100);
+    expect(p1.signature_verified).toBe(true);
+    expect(p1.owner_address).toBe('testowner123');
+    expect(p1.level).toBe(3);
+    expect(p1.attestation_version).toBe(ATTESTATION_VERSION);
     expect(p1.gateway).toBe('test.com');
+    // Old camelCase names are gone
+    expect(p1.txId).toBeUndefined();
+    expect(p1.version).toBeUndefined();
+    // subject_ref is additive-optional and absent by default (§3.2)
+    expect('subject_ref' in p1).toBe(false);
 
-    // Canonical JSON is deterministic (ignoring attestedAt timestamp)
-    const c1 = canonicalize({ ...p1, attestedAt: 'fixed' });
-    const c2 = canonicalize({ ...p2, attestedAt: 'fixed' });
+    // Canonical JSON is deterministic (ignoring the attested_at timestamp)
+    const c1 = canonicalize({ ...p1, attested_at: 'fixed' });
+    const c2 = canonicalize({ ...p2, attested_at: 'fixed' });
     expect(c1).toBe(c2);
+    // JCS sorts object keys: attestation_version sorts first
+    expect(c1.startsWith('{"attestation_version":')).toBe(true);
   });
 
-  it('signs a payload and the signature verifies with standard single-hash RSA-PSS', async () => {
+  it('signs a payload with an explicit 32-byte (DIGEST) PSS salt over JCS', async () => {
     const { signPayload, canonicalize } = await import('../../src/utils/signing.js');
     const payload = {
       test: 'data',
@@ -102,9 +121,11 @@ describe('Signing Module', () => {
     const signature = signPayload(payload);
     expect(signature).not.toBeNull();
 
-    // Round-trip verify: canonical JSON → createVerify('sha256') → RSA-PSS verify
-    // This proves the signature is a standard RSA-PSS(SHA-256(canonical)),
-    // NOT a double-hash RSA-PSS(SHA-256(SHA-256(canonical))).
+    // Round-trip verify: JCS(payload) → createVerify('sha256') → RSA-PSS verify
+    // under the PINNED saltLength=32 (RSA_PSS_SALTLEN_DIGEST, evidence-export.md
+    // §3.3). Proves the signature is a standard RSA-PSS(SHA-256(canonical)) (not
+    // a double hash) AND that it verifies under the fixed 32-byte salt the
+    // kernels use — not the old key-size-dependent AUTO/max salt.
     const canonical = canonicalize(payload);
     const sigBuf = Buffer.from(signature!.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
     const pubKey = createPublicKey({ key: testJwk as any, format: 'jwk' });
@@ -115,7 +136,7 @@ describe('Signing Module', () => {
       {
         key: pubKey,
         padding: cryptoConstants.RSA_PKCS1_PSS_PADDING,
-        saltLength: cryptoConstants.RSA_PSS_SALTLEN_AUTO,
+        saltLength: cryptoConstants.RSA_PSS_SALTLEN_DIGEST,
       },
       sigBuf
     );
@@ -155,7 +176,9 @@ describe('Signing Module', () => {
     expect(attestation!.gateway).toBe('test-gateway.com');
     expect(attestation!.signature.length).toBeGreaterThan(50);
     expect(attestation!.payloadHash.length).toBe(43);
-    expect(attestation!.payload.version).toBe(1);
+    expect(attestation!.payload.attestation_version).toBe('ario.evidence.attestation/v1');
+    expect(attestation!.payload.tx_id).toBe('test-tx-id-padded-to-43-characters-1234567');
+    expect(attestation!.payload.level).toBe(3);
     expect(attestation!.attestedAt).toMatch(/^\d{4}-/);
   });
 });
