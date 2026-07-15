@@ -118,7 +118,9 @@ describeIfAvailable('bundle signing — operator-wallet round-trip', () => {
       {
         key: claimedPubKey,
         padding: cryptoConstants.RSA_PKCS1_PSS_PADDING,
-        saltLength: cryptoConstants.RSA_PSS_SALTLEN_AUTO,
+        // Pinned salt = 32 (RSA_PSS_SALTLEN_DIGEST) — signPayload now signs with
+        // this fixed salt (evidence-export.md §3.3), so verifiers use it too.
+        saltLength: cryptoConstants.RSA_PSS_SALTLEN_DIGEST,
       },
       sigBuf
     );
@@ -132,7 +134,9 @@ describeIfAvailable('bundle signing — operator-wallet round-trip', () => {
       {
         key: otherPub,
         padding: cryptoConstants.RSA_PKCS1_PSS_PADDING,
-        saltLength: cryptoConstants.RSA_PSS_SALTLEN_AUTO,
+        // Pinned salt = 32 (RSA_PSS_SALTLEN_DIGEST) — signPayload now signs with
+        // this fixed salt (evidence-export.md §3.3), so verifiers use it too.
+        saltLength: cryptoConstants.RSA_PSS_SALTLEN_DIGEST,
       },
       sigBuf
     );
@@ -147,7 +151,9 @@ describeIfAvailable('bundle signing — operator-wallet round-trip', () => {
       {
         key: claimedPubKey,
         padding: cryptoConstants.RSA_PKCS1_PSS_PADDING,
-        saltLength: cryptoConstants.RSA_PSS_SALTLEN_AUTO,
+        // Pinned salt = 32 (RSA_PSS_SALTLEN_DIGEST) — signPayload now signs with
+        // this fixed salt (evidence-export.md §3.3), so verifiers use it too.
+        saltLength: cryptoConstants.RSA_PSS_SALTLEN_DIGEST,
       },
       sigBuf
     );

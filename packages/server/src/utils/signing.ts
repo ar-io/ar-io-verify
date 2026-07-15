@@ -4,6 +4,16 @@ import { config } from '../config.js';
 import { logger } from './logger.js';
 import { base64UrlToBuffer, bufferToBase64Url, sha256B64Url } from './crypto.js';
 import type { VerificationResult } from '../types.js';
+// RFC 8785 (JCS) canonicalization — the same reference implementation the
+// @ar.io/proof family kernels use (see ar-io-proof ts/src/verifier.ts). Aliased
+// so this module can keep exporting a `canonicalize()` wrapper of its own.
+import jcsCanonicalize from 'canonicalize';
+
+/**
+ * Self-identifier for the attestation payload schema (evidence-export.md §3.1).
+ * Body-internal only — the record `signature_alg` + the spec are authoritative.
+ */
+export const ATTESTATION_VERSION = 'ario.evidence.attestation/v1';
 
 interface JWK {
   kty: string;
@@ -77,60 +87,120 @@ export function getOperatorPublicKey(): string | null {
 }
 
 /**
- * Build the canonical attestation payload from a verification result.
- * Only includes the claims the operator is standing behind.
- * Keys are sorted alphabetically for deterministic hashing.
+ * A `subject_ref` binds an attestation to an external subject by hash + type
+ * without disclosing its bytes (evidence-export.md §3.2). Additive-optional:
+ * absent ⇒ the attestation binds only to the on-chain tx.
+ */
+export interface AttestationSubjectRef {
+  hash: string;
+  type: string;
+}
+
+/**
+ * Build the attestation payload from a verification result.
+ *
+ * Field names are the family `snake_case` form (evidence-export.md §3.1); the
+ * payload is signed over its JCS (RFC 8785) canonicalization (§3.3), so the
+ * insertion order here is irrelevant — JCS sorts keys. Only the claims the
+ * operator is standing behind are included; the record's signature fields are
+ * NOT part of the signed payload.
  */
 export function buildAttestationPayload(
   result: VerificationResult,
-  gateway: string
+  gateway: string,
+  subjectRef?: AttestationSubjectRef
 ): Record<string, unknown> {
-  return {
-    attestedAt: new Date().toISOString(),
-    blockHeight: result.existence.blockHeight,
-    blockTimestamp: result.existence.blockTimestamp,
-    dataHash: result.authenticity.dataHash,
-    dataSize: result.metadata.dataSize,
+  const payload: Record<string, unknown> = {
+    attestation_version: ATTESTATION_VERSION,
+    attested_at: new Date().toISOString(),
+    block_height: result.existence.blockHeight,
+    block_timestamp: result.existence.blockTimestamp,
+    data_hash: result.authenticity.dataHash,
+    data_size: result.metadata.dataSize,
     gateway,
+    level: result.level,
     operator: operatorAddress,
-    ownerAddress: result.owner.address,
-    signatureVerified: result.authenticity.signatureValid === true,
-    txId: result.txId,
-    version: 1,
+    owner_address: result.owner.address,
+    signature_verified: result.authenticity.signatureValid === true,
+    tx_id: result.txId,
   };
+
+  // Additive-optional (§3.2): emit only when supplied so a subject-less
+  // attestation stays byte-identical to one built without the argument.
+  if (subjectRef) {
+    payload.subject_ref = { hash: subjectRef.hash, type: subjectRef.type };
+  }
+
+  return payload;
 }
 
 /**
- * Canonicalize a payload to deterministic JSON (sorted keys, no whitespace).
+ * Canonicalize a payload to its RFC 8785 (JCS) form.
  *
- * Uses deep recursive sorting so nested objects also serialize identically
- * across implementations. For flat single-level payloads (the existing per-tx
- * attestation) the output matches what `JSON.stringify(obj, Object.keys(obj).sort())`
- * produced before, so previously-signed attestations remain verifiable.
- *
- * Arrays preserve their existing order — array order is semantic, not
- * incidental. Strings, numbers, booleans, null pass through JSON.stringify
- * verbatim.
+ * Migrated (evidence-export.md §3.4) off the previous custom deep-sorted-key
+ * canon onto JCS so the @ar.io/proof kernels verify attestations with their
+ * existing canonicalizer (no second canon to maintain). Wraps the same
+ * `canonicalize` reference implementation the family's `jcs()` uses, with the
+ * identical discipline: reject lone UTF-16 surrogates on the INPUT (RFC 8785
+ * requires well-formed UTF-8; the sibling kernels cannot represent them), and
+ * reject a non-string result.
  */
 export function canonicalize(payload: Record<string, unknown>): string {
-  return canonicalizeValue(payload);
+  rejectLoneSurrogates(payload);
+  const canonical = jcsCanonicalize(payload);
+  if (typeof canonical !== 'string') {
+    throw new Error('canonicalize: JCS returned a non-string (input not JSON-serializable?)');
+  }
+  return canonical;
 }
 
-function canonicalizeValue(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
+// Walk every string in the value (keys and values). The check must run on the
+// INPUT: `canonicalize` escapes a lone surrogate as `\udXXX` text in its
+// output, so the malformed code unit is invisible after serialization.
+function rejectLoneSurrogates(value: unknown): void {
+  if (typeof value === 'string') {
+    if (hasLoneSurrogate(value)) {
+      throw new Error(
+        'canonicalize: input contains a lone UTF-16 surrogate (not representable as UTF-8)'
+      );
+    }
+    return;
   }
   if (Array.isArray(value)) {
-    return '[' + value.map(canonicalizeValue).join(',') + ']';
+    for (const v of value) rejectLoneSurrogates(v);
+    return;
   }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalizeValue(obj[k])).join(',') + '}';
+  if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) {
+      rejectLoneSurrogates(k);
+      rejectLoneSurrogates(v);
+    }
+  }
+}
+
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++; // valid pair
+        continue;
+      }
+      return true; // high surrogate without a low
+    }
+    if (c >= 0xdc00 && c <= 0xdfff) return true; // low surrogate without a high
+  }
+  return false;
 }
 
 /**
- * Sign an attestation payload with the operator's private key.
- * Returns the base64url-encoded RSA-PSS signature.
+ * Sign a payload with the operator's private key.
+ *
+ * Signs RSA-PSS over SHA-256 (MGF1-SHA-256) of the JCS (RFC 8785)
+ * canonicalization of the payload, with salt length = 32 bytes
+ * (RSA_PSS_SALTLEN_DIGEST) per evidence-export.md §3.3. Returns the
+ * base64url-encoded signature.
  */
 export function signPayload(payload: Record<string, unknown>): string | null {
   if (!privatePem) return null;
@@ -143,7 +213,14 @@ export function signPayload(payload: Record<string, unknown>): string | null {
   const signature = signer.sign({
     key: privatePem,
     padding: cryptoConstants.RSA_PKCS1_PSS_PADDING,
-    saltLength: cryptoConstants.RSA_PSS_SALTLEN_AUTO,
+    // Pinned salt = digest length (32 bytes), RSA_PSS_SALTLEN_DIGEST
+    // (evidence-export.md §3.3). The former RSA_PSS_SALTLEN_AUTO resolves to the
+    // maximum key-size-dependent salt on *signing*, which WebCrypto and Python
+    // `cryptography` cannot verify (neither auto-detects salt). saltLength=32 is
+    // what makes the kernel's verifyRsaPssSha256 (WebCrypto, saltLength:32)
+    // round-trip. NOTE: SIGNING path only — the Arweave data-item VERIFY path in
+    // crypto.ts deliberately keeps _AUTO (accepts arweave-js salt=0/32).
+    saltLength: cryptoConstants.RSA_PSS_SALTLEN_DIGEST,
   });
 
   return bufferToBase64Url(signature);
@@ -169,7 +246,7 @@ export function createAttestation(result: VerificationResult): VerificationResul
     signature,
     payloadHash,
     payload,
-    attestedAt: payload.attestedAt as string,
+    attestedAt: payload.attested_at as string,
   };
 }
 
