@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import {
   generateKeyPairSync,
   createSign,
+  createHash,
   webcrypto,
   constants as cryptoConstants,
   type KeyObject,
@@ -103,10 +104,22 @@ async function kernelDeriveOperatorAddress(nBase64url: string): Promise<string> 
   return Buffer.from(digest).toString('base64url');
 }
 
+// Faithful replica of the kernel's sha256Hex (WebCrypto → lowercase hex).
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await subtle.digest('SHA-256', bytes));
+  return Buffer.from(digest).toString('hex');
+}
+
+// The bytes whose SHA-256 the pipeline attested. The orchestrator stores the
+// digest as base64url (sha256B64Url); the signed data_hash must be lowercase
+// hex, so buildAttestationPayload transcodes those same 32 bytes.
+const attestedRawData = Buffer.from('checkpoint envelope JCS bytes — kernel compat');
+const attestedDataHashB64 = createHash('sha256').update(attestedRawData).digest('base64url');
+
 const mockResult = {
   txId: 'kernel-compat-tx-id-padded-to-43-chars-01234',
   level: 3,
-  authenticity: { dataHash: 'independent-sha256-b64url', signatureValid: true },
+  authenticity: { dataHash: attestedDataHashB64, signatureValid: true },
   existence: { blockHeight: 1512345, blockTimestamp: '2026-07-15T18:00:00Z' },
   owner: { address: 'owner-address-b64url-000000000000000000000' },
   metadata: { dataSize: 10485760 },
@@ -139,6 +152,21 @@ describe('attestation ↔ kernel RSA-PSS compatibility (JCS + salt=32 migration)
 
     const ok = await kernelVerifyRsaPssSha256(payloadBytes, sigHex, pubJwk);
     expect(ok).toBe(true);
+  });
+
+  it('data_hash is lowercase hex and round-trips against sha256Hex of the attested bytes', async () => {
+    const payload = signing.buildAttestationPayload(mockResult, 'operator-gateway.example');
+
+    // Lowercase hex (§3.1) — the exact string the kernel binds by comparing to
+    // SHA-256(JCS(checkpoint.envelope)) in lowercase hex (§5 step 6c).
+    expect(payload.data_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(payload.data_hash).toBe(await sha256Hex(attestedRawData));
+
+    // And the attestation carrying that hex data_hash still verifies under the
+    // pinned salt=32 — data_hash is inside the signed bytes.
+    const payloadBytes = new TextEncoder().encode(signing.canonicalize(payload));
+    const sigHex = Buffer.from(signing.signPayload(payload)!, 'base64url').toString('hex');
+    expect(await kernelVerifyRsaPssSha256(payloadBytes, sigHex, pubJwk)).toBe(true);
   });
 
   it('operator address binds to the embedded modulus (base64url(SHA-256(n)))', async () => {

@@ -97,6 +97,20 @@ export interface AttestationSubjectRef {
 }
 
 /**
+ * The attested data's SHA-256 as LOWERCASE HEX for the signed payload
+ * (evidence-export.md §3.1). The kernel binds `data_hash` by string-comparing
+ * it to `SHA-256(JCS(checkpoint.envelope))` in lowercase hex, and `data_hash`
+ * sits inside the signature — so it MUST be signed as hex; it can't be fixed
+ * downstream in the composer. The pipeline already computed the digest as
+ * base64url (`result.authenticity.dataHash`); transcode the same 32 digest
+ * bytes to hex (no recomputation). `null` when no data was fetched.
+ */
+function dataHashToHex(dataHashB64Url: string | null): string | null {
+  if (!dataHashB64Url) return null;
+  return base64UrlToBuffer(dataHashB64Url).toString('hex');
+}
+
+/**
  * Build the attestation payload from a verification result.
  *
  * Field names are the family `snake_case` form (evidence-export.md §3.1); the
@@ -115,7 +129,7 @@ export function buildAttestationPayload(
     attested_at: new Date().toISOString(),
     block_height: result.existence.blockHeight,
     block_timestamp: result.existence.blockTimestamp,
-    data_hash: result.authenticity.dataHash,
+    data_hash: dataHashToHex(result.authenticity.dataHash),
     data_size: result.metadata.dataSize,
     gateway,
     level: result.level,

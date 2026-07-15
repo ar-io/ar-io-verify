@@ -69,10 +69,13 @@ describe('Signing Module', () => {
   it('builds a deterministic snake_case attestation payload', async () => {
     const { buildAttestationPayload, canonicalize, ATTESTATION_VERSION } =
       await import('../../src/utils/signing.js');
+    const rawData = Buffer.from('some attested bytes for data_hash');
+    const dataHashB64 = createHash('sha256').update(rawData).digest('base64url');
+    const dataHashHex = createHash('sha256').update(rawData).digest('hex');
     const mockResult = {
       txId: 'test-tx-id-padded-to-43-characters-1234567',
       level: 3,
-      authenticity: { dataHash: 'testhash123', signatureValid: true },
+      authenticity: { dataHash: dataHashB64, signatureValid: true },
       existence: { blockHeight: 100, blockTimestamp: '2024-01-01T00:00:00Z' },
       owner: { address: 'testowner123' },
       metadata: { dataSize: 500 },
@@ -83,7 +86,10 @@ describe('Signing Module', () => {
 
     // Payload uses family snake_case field names (evidence-export.md §3.1)
     expect(p1.tx_id).toBe('test-tx-id-padded-to-43-characters-1234567');
-    expect(p1.data_hash).toBe('testhash123');
+    // data_hash is lowercase hex — the same 32 digest bytes as the base64url
+    // input, transcoded (§3.1); this is what the kernel string-binds.
+    expect(p1.data_hash).toBe(dataHashHex);
+    expect(p1.data_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(p1.data_size).toBe(500);
     expect(p1.block_height).toBe(100);
     expect(p1.signature_verified).toBe(true);
